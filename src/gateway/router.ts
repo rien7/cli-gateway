@@ -23,6 +23,7 @@ import {
 } from '../db/jobStore.js';
 import { ToolAuth, type ToolKind } from './toolAuth.js';
 import { AcpClient, type PermissionRequest } from '../acp/client.js';
+import type { InitializeResult } from '../acp/types.js';
 
 export type OutboundSink = {
   sendText: (text: string) => Promise<void>;
@@ -42,6 +43,8 @@ export class GatewayRouter {
 
   private currentConversationKey: ConversationKey | null = null;
   private currentSink: OutboundSink | null = null;
+
+  private agentInit: InitializeResult | null = null;
 
   constructor(params: {
     db: Db;
@@ -142,10 +145,10 @@ export class GatewayRouter {
   }
 
   async start(): Promise<void> {
-    const init = await this.client.initialize();
+    this.agentInit = await this.client.initialize();
     log.info('ACP initialized', {
-      protocolVersion: init.protocolVersion,
-      loadSession: init.agentCapabilities?.loadSession,
+      protocolVersion: this.agentInit.protocolVersion,
+      loadSession: this.agentInit.agentCapabilities?.loadSession,
     });
   }
 
@@ -163,7 +166,8 @@ export class GatewayRouter {
       sessionKey = binding.sessionKey;
     } else {
       sessionKey = randomUUID();
-      const init = await this.client.initialize();
+      const init = this.agentInit ?? (await this.client.initialize());
+
       createSession(this.db, {
         sessionKey,
         agentCommand: this.config.acpAgentCommand,

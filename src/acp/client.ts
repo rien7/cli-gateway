@@ -106,7 +106,11 @@ export class AcpClient {
     this.rpc.kill();
   }
 
+  private initPromise: Promise<InitializeResult> | null = null;
+
   async initialize(): Promise<InitializeResult> {
+    if (this.initPromise) return this.initPromise;
+
     const params: InitializeParams = {
       protocolVersion: 1,
       clientCapabilities: {
@@ -120,11 +124,12 @@ export class AcpClient {
       },
     };
 
-    const result = await this.request<InitializeParams, InitializeResult>(
+    this.initPromise = this.request<InitializeParams, InitializeResult>(
       'initialize',
       params,
     );
-    return result;
+
+    return this.initPromise;
   }
 
   async newSession(params: NewSessionParams): Promise<NewSessionResult> {
