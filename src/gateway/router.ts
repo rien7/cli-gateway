@@ -32,7 +32,12 @@ export class GatewayRouter {
   private readonly toolAuth: ToolAuth;
   private readonly onJobsChanged?: () => void;
 
-  private readonly runtimesBySessionKey = new Map<string, BindingRuntime>();
+  private readonly runtimesBySessionKey = new Map<
+    string,
+    { runtime: BindingRuntime; lastUsedMs: number }
+  >();
+
+  private gcTimer: NodeJS.Timeout | null = null;
 
   constructor(params: {
     db: Db;
@@ -46,12 +51,25 @@ export class GatewayRouter {
   }
 
   async start(): Promise<void> {
+    this.gcTimer = setInterval(() => {
+      try {
+        this.gc();
+      } catch (error) {
+        log.warn('runtime GC error', error);
+      }
+    }, 60_000);
+
     log.info('GatewayRouter ready');
   }
 
   close(): void {
-    for (const rt of this.runtimesBySessionKey.values()) {
-      rt.close();
+    if (this.gcTimer) {
+      clearInterval(this.gcTimer);
+      this.gcTimer = null;
+    }
+
+    for (const entry of this.runtimesBySessionKey.values()) {
+      entry.runtime.close();
     }
     this.runtimesBySessionKey.clear();
   }
@@ -85,7 +103,10 @@ export class GatewayRouter {
     bindingKey: string;
   }): BindingRuntime {
     const existing = this.runtimesBySessionKey.get(params.sessionKey);
-    if (existing) return existing;
+    if (existing) {
+      existing.lastUsedMs = Date.now();
+      return existing.runtime;
+    }
 
     const rt = new BindingRuntime({
       db: this.db,
@@ -95,8 +116,43 @@ export class GatewayRouter {
       bindingKey: params.bindingKey,
     });
 
-    this.runtimesBySessionKey.set(params.sessionKey, rt);
+    this.runtimesBySessionKey.set(params.sessionKey, {
+      runtime: rt,
+      lastUsedMs: Date.now(),
+    });
+
+    this.enforceRuntimeLimit();
+
     return rt;
+  }
+
+  private gc(): void {
+    const now = Date.now();
+    const ttlMs = this.config.runtimeIdleTtlSeconds * 1000;
+
+    for (const [sessionKey, entry] of this.runtimesBySessionKey.entries()) {
+      if (now - entry.lastUsedMs <= ttlMs) continue;
+      entry.runtime.close();
+      this.runtimesBySessionKey.delete(sessionKey);
+    }
+
+    this.enforceRuntimeLimit();
+  }
+
+  private enforceRuntimeLimit(): void {
+    const max = this.config.maxBindingRuntimes;
+    if (this.runtimesBySessionKey.size <= max) return;
+
+    const entries = [...this.runtimesBySessionKey.entries()].sort(
+      (a, b) => a[1].lastUsedMs - b[1].lastUsedMs,
+    );
+
+    const removeCount = Math.max(0, entries.length - max);
+    for (let i = 0; i < removeCount; i += 1) {
+      const [sessionKey, entry] = entries[i];
+      entry.runtime.close();
+      this.runtimesBySessionKey.delete(sessionKey);
+    }
   }
 
   private async handleCommand(
@@ -113,8 +169,8 @@ export class GatewayRouter {
       case '/new': {
         const existing = getBinding(this.db, key);
         if (existing) {
-          const rt = this.runtimesBySessionKey.get(existing.sessionKey);
-          rt?.close();
+          const entry = this.runtimesBySessionKey.get(existing.sessionKey);
+          entry?.runtime.close();
           this.runtimesBySessionKey.delete(existing.sessionKey);
         }
 

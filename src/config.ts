@@ -30,6 +30,13 @@ const configSchema = z.object({
   dbPath: z.string().min(1),
 
   schedulerEnabled: z.boolean().default(true),
+
+  runtimeIdleTtlSeconds: z
+    .number()
+    .int()
+    .min(10)
+    .default(15 * 60),
+  maxBindingRuntimes: z.number().int().min(1).max(200).default(30),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -51,6 +58,11 @@ export function loadConfig(): AppConfig {
 
     schedulerEnabled:
       booleanFromEnv.parse(process.env.SCHEDULER_ENABLED) ?? true,
+
+    runtimeIdleTtlSeconds:
+      Number(process.env.RUNTIME_IDLE_TTL_SECONDS ?? '') || undefined,
+    maxBindingRuntimes:
+      Number(process.env.MAX_BINDING_RUNTIMES ?? '') || undefined,
   });
 
   return parsed;

@@ -79,6 +79,7 @@ export class AcpClient {
 
   // run-scoped state
   private currentRun: AcpRun | null = null;
+  private readonly runSeq = new Map<string, number>();
 
   private readonly events: AcpClientEvents;
 
@@ -141,6 +142,8 @@ export class AcpClient {
 
   async prompt(run: AcpRun, params: PromptParams): Promise<PromptResult> {
     this.currentRun = run;
+    this.runSeq.set(run.runId, 0);
+
     try {
       const result = await this.request<PromptParams, PromptResult>(
         'session/prompt',
@@ -149,6 +152,7 @@ export class AcpClient {
       return result;
     } finally {
       this.currentRun = null;
+      this.runSeq.delete(run.runId);
     }
   }
 
@@ -330,12 +334,9 @@ export class AcpClient {
   }
 
   private appendEvent(runId: string, method: string, payload: unknown): void {
-    const nextSeqRow = this.db
-      .prepare(
-        'SELECT COALESCE(MAX(seq), 0) AS maxSeq FROM events WHERE run_id = ?',
-      )
-      .get(runId) as { maxSeq: number };
-    const seq = (nextSeqRow?.maxSeq ?? 0) + 1;
+    const prev = this.runSeq.get(runId) ?? 0;
+    const seq = prev + 1;
+    this.runSeq.set(runId, seq);
 
     this.db
       .prepare(
