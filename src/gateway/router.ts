@@ -21,6 +21,7 @@ import {
   listJobsForBinding,
   setJobEnabled,
 } from '../db/jobStore.js';
+import { ToolAuth, type ToolKind } from './toolAuth.js';
 import { AcpClient, type PermissionRequest } from '../acp/client.js';
 
 export type OutboundSink = {
@@ -31,6 +32,7 @@ export class GatewayRouter {
   private readonly db: Db;
   private readonly config: AppConfig;
   private readonly client: AcpClient;
+  private readonly toolAuth: ToolAuth;
   private readonly onJobsChanged?: () => void;
 
   private readonly pendingPermission = new Map<string, PermissionRequest>();
@@ -50,11 +52,14 @@ export class GatewayRouter {
     this.config = params.config;
     this.onJobsChanged = params.onJobsChanged;
 
+    this.toolAuth = new ToolAuth(this.db);
+
     this.client = new AcpClient({
       db: this.db,
       workspaceRoot: this.config.workspaceRoot,
       agentCommand: this.config.acpAgentCommand,
       agentArgs: this.config.acpAgentArgs,
+      toolAuth: this.toolAuth,
       events: {
         onSessionUpdate: async (_run, _sessionId, update) => {
           const sink = this.currentSink;
@@ -87,6 +92,46 @@ export class GatewayRouter {
 
           const keyStr = conversationKeyString(key);
           this.pendingPermission.set(keyStr, req);
+
+          // Auto-apply persistent policy if present.
+          const bindingKey = bindingKeyFromConversationKey(key);
+          const toolKind = toToolKind(req.params.toolCall?.kind);
+          if (toolKind) {
+            const policy = this.toolAuth.getPersistentPolicy(
+              bindingKey,
+              toolKind,
+            );
+            if (policy === 'allow') {
+              const option = req.params.options.find(
+                (o) => o.kind === 'allow_always' || o.kind === 'allow_once',
+              );
+              if (option) {
+                this.toolAuth.grantOnce(req.sessionKey, toolKind, 1);
+                void this.client.respondPermission(req, {
+                  kind: 'selected',
+                  optionId: option.optionId,
+                });
+                this.pendingPermission.delete(keyStr);
+                void sink.sendText(`[permission] auto-allowed (${toolKind})`);
+                return;
+              }
+            }
+            if (policy === 'reject') {
+              const option = req.params.options.find(
+                (o) => o.kind === 'reject_always' || o.kind === 'reject_once',
+              );
+              if (option) {
+                void this.client.respondPermission(req, {
+                  kind: 'selected',
+                  optionId: option.optionId,
+                });
+                this.pendingPermission.delete(keyStr);
+                void sink.sendText(`[permission] auto-rejected (${toolKind})`);
+                return;
+              }
+            }
+          }
+
           void sink.sendText(formatPermissionRequest(req));
         },
         onAgentStderr: (line) => {
@@ -179,6 +224,22 @@ export class GatewayRouter {
           await sink.sendText(`Invalid option index: ${idx}`);
           return true;
         }
+
+        const toolKind = toToolKind(pr.params.toolCall?.kind);
+        const bindingKey = bindingKeyFromConversationKey(key);
+
+        if (toolKind) {
+          if (opt.kind === 'allow_always') {
+            this.toolAuth.setPersistentPolicy(bindingKey, toolKind, 'allow');
+          }
+          if (opt.kind === 'reject_always') {
+            this.toolAuth.setPersistentPolicy(bindingKey, toolKind, 'reject');
+          }
+          if (opt.kind === 'allow_once' || opt.kind === 'allow_always') {
+            this.toolAuth.grantOnce(pr.sessionKey, toolKind, 1);
+          }
+        }
+
         await this.client.respondPermission(pr, {
           kind: 'selected',
           optionId: opt.optionId,
@@ -195,16 +256,31 @@ export class GatewayRouter {
           return true;
         }
 
+        const bindingKey = bindingKeyFromConversationKey(key);
+        const toolKind = toToolKind(pr.params.toolCall?.kind);
+
         const rejectOnce = pr.params.options.find(
           (o) => o.kind === 'reject_once',
         );
-        if (rejectOnce) {
+        const rejectAlways = pr.params.options.find(
+          (o) => o.kind === 'reject_always',
+        );
+
+        const selected = rejectOnce ?? rejectAlways;
+
+        if (selected && toolKind && selected.kind === 'reject_always') {
+          this.toolAuth.setPersistentPolicy(bindingKey, toolKind, 'reject');
+        }
+
+        if (selected) {
           await this.client.respondPermission(pr, {
             kind: 'selected',
-            optionId: rejectOnce.optionId,
+            optionId: selected.optionId,
           });
           this.pendingPermission.delete(conversationKeyString(key));
-          await sink.sendText(`OK: selected reject_once (${rejectOnce.name})`);
+          await sink.sendText(
+            `OK: selected ${selected.kind} (${selected.name})`,
+          );
           return true;
         }
 
@@ -364,6 +440,25 @@ function formatPermissionRequest(req: PermissionRequest): string {
     .join('\n');
 
   return `\n[permission required]\nTool: ${req.params.toolCall?.title ?? req.params.toolCall?.toolCallId ?? 'tool_call'}\n${options}\nReply with /allow <n> or /deny`;
+}
+
+function toToolKind(kind: unknown): ToolKind | null {
+  if (typeof kind !== 'string') return null;
+
+  const allowed: ToolKind[] = [
+    'read',
+    'edit',
+    'delete',
+    'move',
+    'search',
+    'execute',
+    'think',
+    'fetch',
+    'switch_mode',
+    'other',
+  ];
+
+  return allowed.includes(kind as ToolKind) ? (kind as ToolKind) : null;
 }
 
 function truncate(text: string, max: number): string {

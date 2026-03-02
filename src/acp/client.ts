@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 
 import { log } from '../logging.js';
 import type { Db } from '../db/db.js';
+import type { ToolAuth, ToolKind } from '../gateway/toolAuth.js';
 import { resolveWorkspacePath } from '../tools/workspace.js';
 import {
   isNotification,
@@ -66,6 +67,7 @@ export class AcpClient {
   private readonly workspaceRoot: string;
   private readonly agentCommand: string;
   private readonly agentArgs: string[];
+  private readonly toolAuth: ToolAuth | null;
 
   private readonly rpc: StdioProcess;
   private nextId = 1;
@@ -85,12 +87,14 @@ export class AcpClient {
     workspaceRoot: string;
     agentCommand: string;
     agentArgs: string[];
+    toolAuth?: ToolAuth;
     events?: AcpClientEvents;
   }) {
     this.db = params.db;
     this.workspaceRoot = params.workspaceRoot;
     this.agentCommand = params.agentCommand;
     this.agentArgs = params.agentArgs;
+    this.toolAuth = params.toolAuth ?? null;
     this.events = params.events ?? {};
 
     this.rpc = spawnAcpAgent(this.agentCommand, this.agentArgs);
@@ -218,6 +222,7 @@ export class AcpClient {
 
         case 'fs/read_text_file': {
           const params = req.params as FsReadTextFileParams;
+          this.assertAuthorized('read');
           const resolvedPath = resolveWorkspacePath(
             this.workspaceRoot,
             params.path,
@@ -233,6 +238,7 @@ export class AcpClient {
 
         case 'fs/write_text_file': {
           const params = req.params as FsWriteTextFileParams;
+          this.assertAuthorized('edit');
           const resolvedPath = resolveWorkspacePath(
             this.workspaceRoot,
             params.path,
@@ -245,6 +251,7 @@ export class AcpClient {
 
         case 'terminal/create': {
           const params = req.params as TerminalCreateParams;
+          this.assertAuthorized('execute');
           const terminalId = await this.terminalCreate(params);
           this.respond(req.id, { terminalId } satisfies TerminalCreateResult);
           return;
@@ -266,6 +273,7 @@ export class AcpClient {
 
         case 'terminal/kill': {
           const params = req.params as TerminalKillParams;
+          this.assertAuthorized('execute');
           this.terminalKill(params);
           this.respond(req.id, {});
           return;
@@ -329,6 +337,27 @@ export class AcpClient {
         'INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)',
       )
       .run(runId, seq, method, JSON.stringify(payload), Date.now());
+  }
+
+  private assertAuthorized(kind: ToolKind): void {
+    const sessionKey = this.currentRun?.sessionKey;
+
+    // Tool calls should only occur within a prompt turn.
+    if (!sessionKey) {
+      throw new Error(
+        `Tool call not allowed outside prompt turn (kind=${kind})`,
+      );
+    }
+
+    // If auth is not wired, default deny (secure by default).
+    if (!this.toolAuth) {
+      throw new Error(`Tool call denied (no ToolAuth): ${kind}`);
+    }
+
+    const ok = this.toolAuth.consume(sessionKey, kind);
+    if (!ok) {
+      throw new Error(`Tool call denied by policy: ${kind}`);
+    }
   }
 
   // terminal management (minimal)
