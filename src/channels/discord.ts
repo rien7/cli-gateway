@@ -3,6 +3,7 @@ import {
   ButtonBuilder,
   ButtonStyle,
   Client,
+  EmbedBuilder,
   GatewayIntentBits,
   Partials,
   type TextBasedChannel,
@@ -165,16 +166,39 @@ function createDiscordSink(
           .setStyle(ButtonStyle.Danger),
       );
 
-      const toolKind = req.toolKind ? ` (${req.toolKind})` : '';
-      const prefix = req.uiMode === 'summary' ? '[permission]' : 'Permission required:';
-      const text = `${prefix} ${req.toolTitle}${toolKind}. <@${userId}> click to allow or deny.`;
+      const embed = new EmbedBuilder()
+        .setTitle('Permission required')
+        .setColor(0xffcc00)
+        .addFields(
+          { name: 'Tool', value: truncate(req.toolTitle, 256) },
+          { name: 'Kind', value: req.toolKind ?? 'unknown' },
+        );
 
-      await sendChannel.send({ content: text, components: [row] });
+      if (req.uiMode === 'verbose') {
+        embed.addFields(
+          { name: 'Session', value: truncate(req.sessionKey, 512) },
+          { name: 'Request', value: truncate(req.requestId, 256) },
+        );
+      }
+
+      await sendChannel.send({
+        content: `<@${userId}>`,
+        embeds: [embed],
+        components: [row],
+      });
     },
     sendUi: async (event) => {
-      const header = `**[${event.kind}]** ${event.title}`;
-      const body = event.detail ? `\n\n\`\`\`json\n${truncate(event.detail, 1500)}\n\`\`\`` : '';
-      await sendChannel.send(`${header}${body}`);
+      const embed = new EmbedBuilder()
+        .setTitle(`[${event.kind}] ${event.title}`)
+        .setColor(colorForKind(event.kind));
+
+      if (event.detail && event.mode === 'verbose') {
+        embed.setDescription(
+          `\`\`\`json\n${truncate(event.detail, 3800)}\n\`\`\``,
+        );
+      }
+
+      await sendChannel.send({ embeds: [embed] });
     },
   };
 }
@@ -182,4 +206,17 @@ function createDiscordSink(
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen - 3) + '...';
+}
+
+function colorForKind(kind: string): number {
+  switch (kind) {
+    case 'tool':
+      return 0x0099ff;
+    case 'plan':
+      return 0x8a2be2;
+    case 'task':
+      return 0x00aa55;
+    default:
+      return 0x666666;
+  }
 }

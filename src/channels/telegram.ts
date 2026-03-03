@@ -158,19 +158,27 @@ function createTelegramSink(
       const prefix = req.uiMode === 'summary' ? '[permission]' : 'Permission required:';
       const text = `${prefix} ${req.toolTitle}${toolKind}. Only user ${userId} can approve.`;
 
-      await bot.api.sendMessage(chatId, text, {
+      await bot.api.sendMessage(chatId, escapeHtml(text), {
         message_thread_id: threadId ?? undefined,
         reply_markup: keyboard,
+        parse_mode: 'HTML',
       });
     },
     sendUi: async (event) => {
-      const header = `[${event.kind}] ${event.title}`;
-      const detail = event.detail
-        ? `\n\n${truncate(event.detail, 3000)}`
-        : '';
+      const header = `<b>[${escapeHtml(event.kind)}]</b> ${escapeHtml(event.title)}`;
 
-      await bot.api.sendMessage(chatId, `${header}${detail}`, {
+      if (event.detail && event.mode === 'verbose') {
+        const code = escapeHtml(truncate(event.detail, 3200));
+        await bot.api.sendMessage(chatId, `${header}\n\n<pre><code>${code}</code></pre>`, {
+          message_thread_id: threadId ?? undefined,
+          parse_mode: 'HTML',
+        });
+        return;
+      }
+
+      await bot.api.sendMessage(chatId, header, {
         message_thread_id: threadId ?? undefined,
+        parse_mode: 'HTML',
       });
     },
   };
@@ -179,4 +187,11 @@ function createTelegramSink(
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen - 3) + '...';
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
