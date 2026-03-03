@@ -5,6 +5,7 @@ import type { AppConfig } from '../config.js';
 import { log } from '../logging.js';
 import type { ConversationKey } from '../gateway/sessionStore.js';
 import { createTelegramSink } from './telegramSink.js';
+import { setMessageReaction } from './telegramApi.js';
 
 export type TelegramController = {
   createSink: (
@@ -84,6 +85,16 @@ export async function startTelegram(
           } catch {
             // ignore if message is not editable
           }
+
+          // Emoji reaction as a quick confirmation.
+          const emoji = decision === 'allow' ? '👍' : '👎';
+          void setMessageReaction(config.telegramToken, {
+            chatId: msg.chat.id,
+            messageId: msg.message_id,
+            emoji,
+          }).catch(() => {
+            // ignore
+          });
         }
       }
 
@@ -108,6 +119,15 @@ export async function startTelegram(
       const text = ctx.message.text;
       if (!text?.trim()) return;
 
+      // Emoji reaction to acknowledge receipt.
+      void setMessageReaction(config.telegramToken, {
+        chatId: ctx.chat.id,
+        messageId: ctx.message.message_id,
+        emoji: '👀',
+      }).catch(() => {
+        // ignore
+      });
+
       const threadId = ctx.message.message_thread_id
         ? String(ctx.message.message_thread_id)
         : null;
@@ -123,6 +143,7 @@ export async function startTelegram(
 
       const sink = createTelegramSink(
         bot,
+        config.telegramToken,
         ctx.chat.id,
         threadId ? Number(threadId) : null,
         userId,
@@ -130,9 +151,37 @@ export async function startTelegram(
 
       // Do not await: grammY processes updates sequentially.
       // Awaiting here deadlocks permission flow (callback_query can't be handled).
-      void router.handleUserMessage(key, text, sink).catch((error) => {
-        log.error('Telegram router handler error', error);
-      });
+      // Emoji reaction: acknowledge that we're processing.
+      void (bot.api as any)
+        .setMessageReaction(ctx.chat.id, ctx.message.message_id, {
+          reaction: [{ type: 'emoji', emoji: '🤔' }],
+          is_big: false,
+        })
+        .catch(() => {
+          // ignore
+        });
+
+      const p = router.handleUserMessage(key, text, sink);
+
+      // Emoji reaction: final status.
+      void p
+        .then(async () => {
+          await (bot.api as any).setMessageReaction(ctx.chat.id, ctx.message.message_id, {
+            reaction: [{ type: 'emoji', emoji: '🕊' }],
+            is_big: false,
+          });
+        })
+        .catch(async (error) => {
+          log.error('Telegram router handler error', error);
+          try {
+            await (bot.api as any).setMessageReaction(ctx.chat.id, ctx.message.message_id, {
+              reaction: [{ type: 'emoji', emoji: '😢' }],
+              is_big: false,
+            });
+          } catch {
+            // ignore
+          }
+        });
     } catch (error) {
       log.error('Telegram message handler error', error);
     }
@@ -164,6 +213,7 @@ export async function startTelegram(
     createSink: (chatId, threadId, userId) =>
       createTelegramSink(
         bot,
+        config.telegramToken,
         Number(chatId),
         threadId ? Number(threadId) : null,
         userId,

@@ -83,6 +83,12 @@ Changing workspace closes the current runtime so the next message starts in the 
 - Discord/Telegram: interactive Allow/Deny buttons.
 - Fallback: `/allow <n>` and `/deny`.
 
+## Telegram streaming & reactions
+
+- Private chats: streams partial output via `sendMessageDraft` (best-effort) and sends a final message on completion.
+- Group chats: falls back to `sendMessage` + `editMessageText`.
+- The bot reacts to user messages and permission cards via `setMessageReaction` (best-effort).
+
 ## CI / coverage
 
 - `npm run coverage` enforces >= 90% (lines/functions/statements)
