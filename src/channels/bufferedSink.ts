@@ -46,9 +46,11 @@ export function createBufferedSink(params: {
 
   function scheduleFlush(): void {
     if (flushTimer) return;
-    flushTimer = setTimeout(async () => {
+    flushTimer = setTimeout(() => {
       flushTimer = null;
-      await doFlush();
+      void doFlush().catch(() => {
+        // best-effort background flush; errors surface on explicit flush()
+      });
     }, params.flushIntervalMs);
   }
 
