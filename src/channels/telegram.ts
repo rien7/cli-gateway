@@ -255,33 +255,25 @@ export async function startTelegram(
     log.error('Telegram bot error', err);
   });
 
-  async function sleep(ms: number): Promise<void> {
-    await new Promise((r) => setTimeout(r, ms));
+  // Ensure webhook is disabled for long polling.
+  void bot.api
+    .deleteWebhook({ drop_pending_updates: false })
+    .catch((err) => log.warn('Telegram deleteWebhook error', err));
+
+  log.info('Telegram long polling start', {
+    allowedUpdates: ['message', 'callback_query'],
+    dropPendingUpdates: false,
+  });
+
+  try {
+    // grammY processes updates sequentially.
+    // Do not await this call.
+    bot.start({
+      allowed_updates: ['message', 'callback_query'],
+    });
+  } catch (err) {
+    log.error('Telegram bot start error', err);
   }
-
-  // Long polling loop: avoids permanent outage on 409 conflicts.
-  void (async () => {
-    for (;;) {
-      try {
-        await bot.api.deleteWebhook({ drop_pending_updates: true });
-
-        log.info('Telegram long polling start', {
-          allowedUpdates: ['message', 'callback_query'],
-          dropPendingUpdates: true,
-        });
-
-        await bot.start({
-          allowed_updates: ['message', 'callback_query'],
-        });
-
-        log.warn('Telegram bot stopped; restarting in 2s');
-      } catch (err) {
-        log.error('Telegram bot start/poll error; restarting in 2s', err);
-      }
-
-      await sleep(2000);
-    }
-  })();
 
   return {
     createSink: (chatId, threadId, userId) =>
