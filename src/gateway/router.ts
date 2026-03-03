@@ -13,6 +13,7 @@ import {
   getSession,
   upsertBinding,
   type ConversationKey,
+  type Platform,
 } from './sessionStore.js';
 import {
   createJob,
@@ -155,6 +156,49 @@ export class GatewayRouter {
       entry.runtime.close();
       this.runtimesBySessionKey.delete(sessionKey);
     }
+  }
+
+  async handlePermissionUi(params: {
+    platform: Platform;
+    sessionKey: string;
+    requestId: string;
+    decision: 'allow' | 'deny';
+    actorUserId: string;
+  }): Promise<{ ok: boolean; message: string }> {
+    const binding = this.db
+      .prepare(
+        'SELECT binding_key as bindingKey, platform, chat_id as chatId, user_id as userId FROM bindings WHERE session_key = ? ORDER BY updated_at DESC LIMIT 1',
+      )
+      .get(params.sessionKey) as
+      | {
+          bindingKey: string;
+          platform: Platform;
+          chatId: string;
+          userId: string;
+        }
+      | undefined;
+
+    if (!binding) {
+      return { ok: false, message: 'Unknown session binding.' };
+    }
+
+    if (binding.platform !== params.platform) {
+      return { ok: false, message: 'Permission binding platform mismatch.' };
+    }
+
+    if (binding.userId !== params.actorUserId) {
+      return { ok: false, message: 'Not authorized.' };
+    }
+
+    const entry = this.runtimesBySessionKey.get(params.sessionKey);
+    if (!entry) {
+      return { ok: false, message: 'No active runtime. Send a message first.' };
+    }
+
+    return entry.runtime.decidePermission({
+      decision: params.decision,
+      requestId: params.requestId,
+    });
   }
 
   private async handleCommand(

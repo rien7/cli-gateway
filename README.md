@@ -8,7 +8,7 @@ Chat-channel ↔ ACP agent gateway with scheduler.
 
 - Discord
 - Telegram
-- (Feishu planned)
+- Feishu (webhook mode, MVP)
 
 It uses **one ACP stdio agent process per conversation binding** to avoid cross-talk and support concurrency.
 
@@ -46,11 +46,20 @@ cp .env.example .env
 npm run dev
 ```
 
+## Feishu setup (MVP)
+
+Feishu currently runs in webhook event-subscription mode:
+
+- Listener: `http(s)://<host>:FEISHU_LISTEN_PORT/feishu/events`
+- Required env: `FEISHU_APP_ID`, `FEISHU_APP_SECRET`
+- Optional verification: set `FEISHU_VERIFICATION_TOKEN` and configure the same token in Feishu
+- Assumption: event payloads are **not** encrypted (no encrypt key)
+
 ## Chat commands (MVP)
 
 - `/new` reset session binding
-- `/allow <n>` select a pending permission option by index
-- `/deny` reject a pending permission request (prefers `reject_once`)
+- `/allow <n>` select a pending permission option by index (fallback)
+- `/deny` reject a pending permission request (fallback)
 - `/cron help|list|add|del|enable|disable` manage scheduled prompts
 - `/last` show last run output for this session
 - `/replay [runId]` replay stored `session/update` output for a run (best-effort)
@@ -59,6 +68,7 @@ npm run dev
 
 - File system and terminal tool calls are restricted to `WORKSPACE_ROOT`.
 - Tool execution is **deny-by-default**; the user must approve via ACP permission flow.
+- Approvals are interactive (buttons) on Discord/Telegram; `/allow`/`/deny` remain as fallback.
 - You can persist policy choices (e.g. `allow_always` / `reject_always`) per conversation.
 
 ## Memory (context replay)

@@ -7,13 +7,14 @@ export type SinkFactory = (
   platform: Platform,
   chatId: string,
   threadId: string | null,
+  userId: string,
 ) => OutboundSink;
 
 export function createSinkFactory(params: {
   discord: DiscordController | null;
   telegram: TelegramController | null;
 }): SinkFactory {
-  return (platform, chatId, threadId) => {
+  return (platform, chatId, threadId, userId) => {
     switch (platform) {
       case 'discord': {
         if (!params.discord) throw new Error('Discord sink not available');
@@ -25,7 +26,7 @@ export function createSinkFactory(params: {
 
       case 'telegram': {
         if (!params.telegram) throw new Error('Telegram sink not available');
-        return params.telegram.createSink(chatId, threadId);
+        return params.telegram.createSink(chatId, threadId, userId);
       }
 
       default:

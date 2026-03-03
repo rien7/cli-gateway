@@ -23,6 +23,11 @@ const configSchema = z.object({
 
   telegramToken: z.string().optional(),
 
+  feishuAppId: z.string().optional(),
+  feishuAppSecret: z.string().optional(),
+  feishuVerificationToken: z.string().optional(),
+  feishuListenPort: z.number().int().min(1).max(65535).default(3030),
+
   acpAgentCommand: z.string().min(1),
   acpAgentArgs: z.array(z.string()),
 
@@ -50,6 +55,11 @@ export function loadConfig(): AppConfig {
     discordToken: process.env.DISCORD_TOKEN,
     discordAllowChannelId: process.env.DISCORD_ALLOW_CHANNEL_ID,
     telegramToken: process.env.TELEGRAM_TOKEN,
+
+    feishuAppId: process.env.FEISHU_APP_ID,
+    feishuAppSecret: process.env.FEISHU_APP_SECRET,
+    feishuVerificationToken: process.env.FEISHU_VERIFICATION_TOKEN,
+    feishuListenPort: Number(process.env.FEISHU_LISTEN_PORT ?? '') || undefined,
 
     acpAgentCommand: process.env.ACP_AGENT_COMMAND,
     acpAgentArgs: (process.env.ACP_AGENT_ARGS ?? '')

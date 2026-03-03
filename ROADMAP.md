@@ -10,7 +10,7 @@ This document lists current gaps (vs a "production gateway") and the planned dir
 - Crash mid-stream: partial output may be sent without a durable checkpoint.
 
 ### Channels
-- Feishu/Lark: not implemented yet (channel adapter + auth + event subscription + message send).
+- Feishu/Lark: implemented (webhook mode) but minimal (no streaming edit, no interactive approvals).
 - Discord threads: not supported (currently binds to channel id, threadId is always null).
 
 ### Tooling / Permissions
@@ -32,10 +32,12 @@ This document lists current gaps (vs a "production gateway") and the planned dir
 - Runtime GC (idle TTL + max runtimes).
 - Context replay (DB-backed) for fresh ACP sessions.
 - Delivery checkpoints table + `/replay` command (best-effort).
+- Interactive permission buttons on Discord/Telegram (Allow/Deny).
+- Feishu inbound webhook + outbound send (MVP).
 
 ## Suggested Next Steps (Priority)
 
 1. Delivery reliability: write checkpoints during streaming, add replay/resume logic, add idempotency keys.
-2. Feishu channel adapter.
-3. Add minimal tests for DB stores + context replay builder.
-4. Add health endpoint + basic metrics.
+2. Add minimal tests for DB stores + context replay builder.
+3. Add health endpoint + basic metrics.
+4. Discord threads + Feishu streaming/edit support.

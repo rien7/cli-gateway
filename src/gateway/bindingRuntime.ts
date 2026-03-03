@@ -118,6 +118,21 @@ export class BindingRuntime {
             }
           }
 
+          const title =
+            req.params.toolCall?.title ??
+            req.params.toolCall?.toolCallId ??
+            'tool_call';
+
+          if (sink.requestPermission) {
+            void sink.requestPermission({
+              sessionKey: this.sessionKey,
+              requestId: String(req.requestId),
+              toolTitle: title,
+              toolKind: toolKind ?? null,
+            });
+            return;
+          }
+
           void sink.sendText(formatPermissionRequest(req));
         },
         onAgentStderr: (line) => {
@@ -209,23 +224,42 @@ export class BindingRuntime {
     return Boolean(this.acpSessionId);
   }
 
-  async denyPermission(sink: OutboundSink): Promise<void> {
+  async decidePermission(params: {
+    decision: 'allow' | 'deny';
+    requestId?: string;
+  }): Promise<{ ok: boolean; message: string }> {
     const pr = this.pendingPermission;
     if (!pr) {
-      await sink.sendText('No pending permission request.');
-      return;
+      return { ok: false, message: 'No pending permission request.' };
+    }
+
+    if (params.requestId && String(pr.requestId) !== params.requestId) {
+      return { ok: false, message: 'Permission request expired.' };
     }
 
     const toolKind = toToolKind(pr.params.toolCall?.kind);
 
+    const allowOnce = pr.params.options.find((o) => o.kind === 'allow_once');
+    const allowAlways = pr.params.options.find((o) => o.kind === 'allow_always');
+
     const rejectOnce = pr.params.options.find((o) => o.kind === 'reject_once');
-    const rejectAlways = pr.params.options.find(
-      (o) => o.kind === 'reject_always',
-    );
-    const selected = rejectOnce ?? rejectAlways;
+    const rejectAlways = pr.params.options.find((o) => o.kind === 'reject_always');
+
+    const selected =
+      params.decision === 'allow'
+        ? (allowOnce ?? allowAlways)
+        : (rejectOnce ?? rejectAlways);
+
+    if (selected && toolKind && selected.kind === 'allow_always') {
+      this.toolAuth.setPersistentPolicy(this.bindingKey, toolKind, 'allow');
+    }
 
     if (selected && toolKind && selected.kind === 'reject_always') {
       this.toolAuth.setPersistentPolicy(this.bindingKey, toolKind, 'reject');
+    }
+
+    if (selected && toolKind && (selected.kind === 'allow_once' || selected.kind === 'allow_always')) {
+      this.toolAuth.grantOnce(this.sessionKey, toolKind, 1);
     }
 
     if (selected) {
@@ -234,13 +268,24 @@ export class BindingRuntime {
         optionId: selected.optionId,
       });
       this.pendingPermission = null;
-      await sink.sendText(`OK: selected ${selected.kind} (${selected.name})`);
-      return;
+
+      return {
+        ok: true,
+        message:
+          params.decision === 'allow'
+            ? 'OK: allowed.'
+            : 'OK: denied.',
+      };
     }
 
     await this.client.respondPermission(pr, { kind: 'cancelled' });
     this.pendingPermission = null;
-    await sink.sendText('OK: cancelled permission request.');
+    return { ok: true, message: 'OK: cancelled permission request.' };
+  }
+
+  async denyPermission(sink: OutboundSink): Promise<void> {
+    const res = await this.decidePermission({ decision: 'deny' });
+    await sink.sendText(res.message);
   }
 
   prompt(params: {

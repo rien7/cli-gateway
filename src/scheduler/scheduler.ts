@@ -17,6 +17,7 @@ export function startScheduler(params: {
     platform: Platform,
     chatId: string,
     threadId: string | null,
+    userId: string,
   ) => Promise<OutboundSink>;
 }): Scheduler {
   let tasks: cron.ScheduledTask[] = [];
@@ -82,6 +83,7 @@ export function startScheduler(params: {
           binding.platform,
           binding.chatId,
           binding.threadId,
+          binding.userId,
         );
 
         await params.router.handleUserMessage(

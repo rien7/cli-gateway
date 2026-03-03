@@ -6,10 +6,10 @@ This file is for coding agents (Codex/Claude/etc) working in this repository.
 
 `cli-gateway` is a chat-channel ↔ ACP (Agent Client Protocol) gateway with:
 
-- Discord + Telegram adapters
+- Discord + Telegram + Feishu adapters
 - Per-binding ACP stdio runtime isolation (one agent process per binding)
 - SQLite persistence (sessions/bindings/runs/events/jobs)
-- Deny-by-default tool execution via ACP `session/request_permission`
+- Deny-by-default tool execution via ACP `session/request_permission` (interactive buttons on DC/TG)
 
 ## Key paths
 
@@ -18,7 +18,7 @@ This file is for coding agents (Codex/Claude/etc) working in this repository.
 - ACP stdio client: `src/acp/client.ts`
 - DB schema/migrations: `src/db/migrations.ts`
 - Scheduler: `src/scheduler/scheduler.ts`
-- Channel sinks: `src/channels/discord.ts`, `src/channels/telegram.ts`
+- Channel sinks: `src/channels/discord.ts`, `src/channels/telegram.ts`, `src/channels/feishu.ts`
 
 ## Local dev
 

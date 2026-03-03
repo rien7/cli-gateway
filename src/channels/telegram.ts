@@ -1,4 +1,4 @@
-import { Bot } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 
 import type { GatewayRouter, OutboundSink } from '../gateway/router.js';
 import type { AppConfig } from '../config.js';
@@ -10,6 +10,7 @@ export type TelegramController = {
   createSink: (
     chatId: string,
     threadId: string | null,
+    userId: string,
   ) => OutboundSink & { flush: () => Promise<void> };
 };
 
@@ -24,6 +25,52 @@ export async function startTelegram(
 
   const bot = new Bot(config.telegramToken);
 
+  bot.on('callback_query:data', async (ctx) => {
+    try {
+      const data = ctx.callbackQuery.data;
+      if (!data.startsWith('acpperm:')) return;
+
+      const parts = data.split(':');
+      const sessionKey = parts[1] ?? '';
+      const requestId = parts[2] ?? '';
+      const decision = parts[3] ?? '';
+
+      if (!sessionKey || !requestId || (decision !== 'allow' && decision !== 'deny')) {
+        return;
+      }
+
+      const actorUserId = String(ctx.from?.id ?? '');
+
+      const res = await router.handlePermissionUi({
+        platform: 'telegram',
+        sessionKey,
+        requestId,
+        decision,
+        actorUserId,
+      });
+
+      await ctx.answerCallbackQuery({
+        text: res.message,
+        show_alert: !res.ok,
+      });
+
+      if (res.ok) {
+        const msg = ctx.callbackQuery.message;
+        if (msg) {
+          try {
+            await bot.api.editMessageReplyMarkup(msg.chat.id, msg.message_id, {
+              reply_markup: { inline_keyboard: [] },
+            });
+          } catch {
+            // ignore if message is not editable
+          }
+        }
+      }
+    } catch (error) {
+      log.error('Telegram callback handler error', error);
+    }
+  });
+
   bot.on('message:text', async (ctx) => {
     try {
       const text = ctx.message.text;
@@ -33,18 +80,22 @@ export async function startTelegram(
         ? String(ctx.message.message_thread_id)
         : null;
 
+      const userId = String(ctx.from?.id ?? 'unknown');
+
       const key: ConversationKey = {
         platform: 'telegram',
         chatId: String(ctx.chat.id),
         threadId,
-        userId: String(ctx.from?.id ?? 'unknown'),
+        userId,
       };
 
       const sink = createTelegramSink(
         bot,
         ctx.chat.id,
         threadId ? Number(threadId) : null,
+        userId,
       );
+
       await router.handleUserMessage(key, text, sink);
     } catch (error) {
       log.error('Telegram message handler error', error);
@@ -58,11 +109,12 @@ export async function startTelegram(
   await bot.start();
 
   return {
-    createSink: (chatId, threadId) =>
+    createSink: (chatId, threadId, userId) =>
       createTelegramSink(
         bot,
         Number(chatId),
         threadId ? Number(threadId) : null,
+        userId,
       ),
   };
 }
@@ -71,6 +123,7 @@ function createTelegramSink(
   bot: Bot,
   chatId: number,
   threadId: number | null,
+  userId: string,
 ): OutboundSink & { flush: () => Promise<void> } {
   const buffered = createBufferedSink({
     maxLen: 3800,
@@ -93,5 +146,21 @@ function createTelegramSink(
     sendText: buffered.sendText,
     flush: buffered.flush,
     getDeliveryState: buffered.getState,
+    requestPermission: async (req) => {
+      const allowData = `acpperm:${req.sessionKey}:${req.requestId}:allow`;
+      const denyData = `acpperm:${req.sessionKey}:${req.requestId}:deny`;
+
+      const keyboard = new InlineKeyboard()
+        .text('✅ Allow', allowData)
+        .text('❌ Deny', denyData);
+
+      const toolKind = req.toolKind ? ` (${req.toolKind})` : '';
+      const text = `Permission required: ${req.toolTitle}${toolKind}. Only user ${userId} can approve.`;
+
+      await bot.api.sendMessage(chatId, text, {
+        message_thread_id: threadId ?? undefined,
+        reply_markup: keyboard,
+      });
+    },
   };
 }

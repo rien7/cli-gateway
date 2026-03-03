@@ -1,4 +1,7 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
   GatewayIntentBits,
   Partials,
@@ -15,6 +18,7 @@ import { createBufferedSink } from './bufferedSink.js';
 export type DiscordController = {
   createSink: (
     channelId: string,
+    userId: string,
   ) => Promise<OutboundSink & { flush: () => Promise<void> }>;
 };
 
@@ -41,6 +45,45 @@ export async function startDiscord(
     log.info('Discord connected');
   });
 
+  client.on('interactionCreate', async (interaction) => {
+    try {
+      if (!interaction.isButton()) return;
+
+      const id = interaction.customId;
+      if (!id.startsWith('acpperm:')) return;
+
+      const parts = id.split(':');
+      const sessionKey = parts[1] ?? '';
+      const requestId = parts[2] ?? '';
+      const decision = parts[3] ?? '';
+
+      if (!sessionKey || !requestId || (decision !== 'allow' && decision !== 'deny')) {
+        return;
+      }
+
+      const res = await router.handlePermissionUi({
+        platform: 'discord',
+        sessionKey,
+        requestId,
+        decision,
+        actorUserId: interaction.user.id,
+      });
+
+      if (!res.ok) {
+        if (interaction.replied || interaction.deferred) {
+          await interaction.followUp({ content: res.message, ephemeral: true });
+          return;
+        }
+        await interaction.reply({ content: res.message, ephemeral: true });
+        return;
+      }
+
+      await interaction.update({ content: res.message, components: [] });
+    } catch (error) {
+      log.error('Discord interaction handler error', error);
+    }
+  });
+
   client.on('messageCreate', async (message) => {
     try {
       if (message.author.bot) return;
@@ -63,7 +106,7 @@ export async function startDiscord(
       };
 
       const channel = message.channel as TextBasedChannel;
-      const sink = createDiscordSink(channel);
+      const sink = createDiscordSink(channel, message.author.id);
 
       await router.handleUserMessage(key, text, sink);
     } catch (error) {
@@ -74,18 +117,19 @@ export async function startDiscord(
   await client.login(config.discordToken);
 
   return {
-    createSink: async (channelId: string) => {
+    createSink: async (channelId: string, userId: string) => {
       const channel = (await client.channels.fetch(
         channelId,
       )) as TextBasedChannel | null;
       if (!channel) throw new Error(`Discord channel not found: ${channelId}`);
-      return createDiscordSink(channel);
+      return createDiscordSink(channel, userId);
     },
   };
 }
 
 function createDiscordSink(
   channel: TextBasedChannel,
+  userId: string,
 ): OutboundSink & { flush: () => Promise<void> } {
   const sendChannel = channel as unknown as SendableChannels;
 
@@ -106,5 +150,25 @@ function createDiscordSink(
     sendText: buffered.sendText,
     flush: buffered.flush,
     getDeliveryState: buffered.getState,
+    requestPermission: async (req) => {
+      const allowId = `acpperm:${req.sessionKey}:${req.requestId}:allow`;
+      const denyId = `acpperm:${req.sessionKey}:${req.requestId}:deny`;
+
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(allowId)
+          .setLabel('Allow')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(denyId)
+          .setLabel('Deny')
+          .setStyle(ButtonStyle.Danger),
+      );
+
+      const toolKind = req.toolKind ? ` (${req.toolKind})` : '';
+      const text = `Permission required: ${req.toolTitle}${toolKind}. <@${userId}> click to allow or deny.`;
+
+      await sendChannel.send({ content: text, components: [row] });
+    },
   };
 }
