@@ -29,8 +29,10 @@
   },
   "scripts": {
     "dev": "tsx src/main.ts",
+    "dev:guard": "bash scripts/run-guard.sh npm run dev",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
+    "start:guard": "bash scripts/run-guard.sh",
     "lint": "eslint .",
     "format": "prettier -w .",
     "test": "node scripts/run-tests.mjs",

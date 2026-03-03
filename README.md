@@ -75,6 +75,24 @@ npm i
 npm run dev
 ```
 
+## Process Guard (Auto Restart)
+
+For crash protection in long-running deployments:
+
+```bash
+npm run build
+npm run start:guard
+```
+
+`scripts/run-guard.sh` restarts `cli-gateway` when it exits abnormally, with exponential backoff.
+
+Useful env vars:
+
+- `RESTART_BASE_DELAY_SECONDS` (default `2`)
+- `RESTART_MAX_DELAY_SECONDS` (default `30`)
+- `RESTART_MAX_ATTEMPTS` (default `0`, unlimited)
+- `RESTART_ON_EXIT_0` (default `0`)
+
 ## Feishu setup (MVP)
 
 Feishu currently runs in webhook event-subscription mode:

@@ -69,6 +69,38 @@ npm run build
 node dist/main.js
 ```
 
+## Process guard (auto restart)
+
+For crash-protection and auto-restart, use:
+
+```bash
+npm run build
+npm run start:guard
+```
+
+This wraps `node dist/main.js` and restarts it with exponential backoff when
+the process exits abnormally.
+
+Useful env vars:
+
+- `RESTART_BASE_DELAY_SECONDS` (default `2`)
+- `RESTART_MAX_DELAY_SECONDS` (default `30`)
+- `RESTART_MAX_ATTEMPTS` (default `0`, unlimited)
+- `RESTART_ON_EXIT_0` (default `0`, do not restart on clean exit)
+
+Examples:
+
+```bash
+# dev mode with auto restart on crash
+npm run dev:guard
+
+# restart even on exit 0 (rarely needed)
+RESTART_ON_EXIT_0=1 bash scripts/run-guard.sh
+```
+
+For long-running production hosts, prefer `systemd` to supervise the guard
+script, so service startup at boot and log collection are managed by OS.
+
 ## Switching workspace from chat
 
 Per conversation binding (persistent via DB):

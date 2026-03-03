@@ -1,5 +1,9 @@
 import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   Client,
+  EmbedBuilder,
   GatewayIntentBits,
   Partials,
   type ChatInputCommandInteraction,
@@ -260,7 +264,7 @@ async function handleSlashCommand(params: {
   }
 }
 
-function createDiscordInteractionSink(
+export function createDiscordInteractionSink(
   interaction: ChatInputCommandInteraction,
 ): OutboundSink & { flush: () => Promise<void>; hasResponded: () => boolean } {
   let text = '';
@@ -284,6 +288,75 @@ function createDiscordInteractionSink(
     await interaction.followUp({ content: chunk });
   };
 
+  const sendPermissionCard = async (req: {
+    uiMode: 'verbose' | 'summary';
+    sessionKey: string;
+    requestId: string;
+    toolTitle: string;
+    toolKind: string | null;
+  }): Promise<void> => {
+    const allowId = `acpperm:${req.sessionKey}:${req.requestId}:allow`;
+    const denyId = `acpperm:${req.sessionKey}:${req.requestId}:deny`;
+
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(allowId)
+        .setLabel('Allow')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(denyId)
+        .setLabel('Deny')
+        .setStyle(ButtonStyle.Danger),
+    );
+
+    const embed = new EmbedBuilder()
+      .setTitle('Permission required')
+      .setColor(0xffcc00)
+      .addFields(
+        { name: 'Tool', value: truncate(req.toolTitle, 256) },
+        { name: 'Kind', value: req.toolKind ?? 'unknown' },
+      );
+
+    if (req.uiMode === 'verbose') {
+      embed.addFields(
+        { name: 'Session', value: truncate(req.sessionKey, 512) },
+        { name: 'Request', value: truncate(req.requestId, 256) },
+      );
+    }
+
+    if (!hasResponded) {
+      hasResponded = true;
+      if (interaction.deferred) {
+        await interaction.editReply({
+          content: `<@${interaction.user.id}>`,
+          embeds: [embed],
+          components: [row],
+        });
+        return;
+      }
+      if (interaction.replied) {
+        await interaction.followUp({
+          content: `<@${interaction.user.id}>`,
+          embeds: [embed],
+          components: [row],
+        });
+        return;
+      }
+      await interaction.reply({
+        content: `<@${interaction.user.id}>`,
+        embeds: [embed],
+        components: [row],
+      });
+      return;
+    }
+
+    await interaction.followUp({
+      content: `<@${interaction.user.id}>`,
+      embeds: [embed],
+      components: [row],
+    });
+  };
+
   return {
     sendText: async (delta) => {
       text += delta;
@@ -303,6 +376,9 @@ function createDiscordInteractionSink(
       const body =
         event.mode === 'verbose' && event.detail ? `\n\n${event.detail}` : '';
       await sendChunk(truncate(head + body, 1900));
+    },
+    requestPermission: async (req) => {
+      await sendPermissionCard(req);
     },
     hasResponded: () => hasResponded,
   };
