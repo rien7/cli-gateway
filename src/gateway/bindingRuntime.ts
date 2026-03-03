@@ -1,7 +1,7 @@
 import { log } from '../logging.js';
 import type { Db } from '../db/db.js';
 import type { AppConfig } from '../config.js';
-import type { OutboundSink, UiMode } from './types.js';
+import type { OutboundSink, ToolUiStage, UiMode } from './types.js';
 import { AcpClient, type PermissionRequest } from '../acp/client.js';
 import type { ContentBlock, InitializeResult } from '../acp/types.js';
 import {
@@ -34,7 +34,7 @@ export class BindingRuntime {
   private currentUiMode: UiMode = 'verbose';
   private currentActorUserId: string | null = null;
   private sinkWriteQueue: Promise<void> = Promise.resolve();
-  private summaryToolSeen = new Set<string>();
+  private toolCallTitles = new Map<string, string>();
 
   private readonly workspaceRoot: string;
 
@@ -88,14 +88,8 @@ export class BindingRuntime {
               update?.sessionUpdate === 'tool_call' ||
               update?.sessionUpdate === 'tool_call_update'
             ) {
-              const rawTitle = String(
-                update?.title ?? update?.toolCallId ?? 'tool_call',
-              );
-              const title =
-                this.currentUiMode === 'summary'
-                  ? this.selectSummaryToolTitle(rawTitle)
-                  : rawTitle;
-              if (!title) return;
+              const ui = this.buildToolUiEvent(update);
+              if (!ui) return;
 
               const detail =
                 this.currentUiMode === 'verbose'
@@ -110,14 +104,17 @@ export class BindingRuntime {
                 await sink.sendUi({
                   kind: 'tool',
                   mode: this.currentUiMode,
-                  title,
+                  title: ui.title,
                   detail,
+                  toolCallId: ui.toolCallId,
+                  stage: ui.stage,
+                  status: ui.status,
                 });
               } else {
                 await sink.sendText(
                   this.currentUiMode === 'verbose'
-                    ? `\n[tool]\n${title}\n${detail ?? ''}\n`
-                    : `\n[tool] ${title}`,
+                    ? `\n[tool]\n${ui.title}\n${detail ?? ''}\n`
+                    : `\n[tool] ${ui.title}`,
                 );
               }
             }
@@ -161,46 +158,10 @@ export class BindingRuntime {
         },
         onClientTool: (run, event) => {
           this.enqueueSinkWrite(async () => {
-            const sink = this.activeSink;
-            if (!sink) return;
-
             if (run.runId !== this.currentRunId) return;
-
-            let title = `${event.method} (${event.phase})`;
-            if (this.currentUiMode === 'summary') {
-              if (event.phase !== 'start') return;
-              const selected = this.selectSummaryToolTitle(
-                event.method,
-              );
-              if (!selected) return;
-              title = selected;
-            }
-
-            const detail =
-              this.currentUiMode === 'verbose'
-                ? renderJson(
-                    { params: event.params, result: event.result, error: event.error },
-                    this.config.uiJsonMaxChars,
-                  )
-                : undefined;
-
-            if (sink.sendUi) {
-              await sink.sendUi({
-                kind: 'tool',
-                mode: this.currentUiMode,
-                title,
-                detail,
-              });
-              return;
-            }
-
-            if (this.currentUiMode === 'summary') return;
-
-            await sink.sendText(
-              this.currentUiMode === 'verbose'
-                ? `\n[tool] ${title}\n${detail ?? ''}\n`
-                : `\n[tool] ${title}`,
-            );
+            // No-op for UI: tool updates are emitted via session/update
+            // (tool_call/tool_call_update) to avoid duplicate user messages.
+            void event;
           });
         },
         onPermissionRequest: (req) => {
@@ -480,7 +441,7 @@ export class BindingRuntime {
       this.currentActorUserId = params.actorUserId ?? null;
       this.activeSink = params.sink;
       this.sinkWriteQueue = Promise.resolve();
-      this.summaryToolSeen = new Set<string>();
+      this.toolCallTitles = new Map<string, string>();
 
       try {
         const run = {
@@ -525,7 +486,7 @@ export class BindingRuntime {
         this.currentRunId = null;
         this.currentUiMode = 'verbose';
         this.currentActorUserId = null;
-        this.summaryToolSeen = new Set<string>();
+        this.toolCallTitles = new Map<string, string>();
       }
     });
 
@@ -545,14 +506,35 @@ export class BindingRuntime {
     return expected === actorUserId;
   }
 
-  private selectSummaryToolTitle(rawTitle: string): string | null {
-    const normalized = normalizeSummaryToolTitle(rawTitle);
-    if (!normalized) return null;
-    const dedupeKey = normalized.toLowerCase();
-    if (this.summaryToolSeen.has(dedupeKey)) return null;
-    this.summaryToolSeen.add(dedupeKey);
+  private buildToolUiEvent(
+    update: any,
+  ): { title: string; toolCallId?: string; stage: ToolUiStage; status: string } | null {
+    const stage = inferToolStage(update);
+    const status = toolStatusLabel(stage, update);
+    const toolCallId = extractToolCallId(update) ?? undefined;
 
-    return normalized;
+    const rawTitle = String(update?.title ?? toolCallId ?? 'tool_call');
+    let baseTitle =
+      this.currentUiMode === 'summary'
+        ? normalizeSummaryToolTitle(rawTitle)
+        : rawTitle.trim() || 'tool_call';
+    if (!baseTitle) return null;
+
+    if (toolCallId) {
+      const existingTitle = this.toolCallTitles.get(toolCallId);
+      if (!existingTitle && baseTitle) {
+        this.toolCallTitles.set(toolCallId, baseTitle);
+      } else if (existingTitle) {
+        baseTitle = existingTitle;
+      }
+    }
+
+    return {
+      title: `${baseTitle} · ${status}`,
+      toolCallId,
+      stage,
+      status,
+    };
   }
 }
 
@@ -617,6 +599,78 @@ function normalizeSummaryToolTitle(title: string): string | null {
   if (lowered.includes('browser') || lowered.includes('navigate')) return 'browser/open';
 
   return trimmed;
+}
+
+function inferToolStage(update: any): ToolUiStage {
+  if (update?.sessionUpdate === 'tool_call') return 'start';
+  const status = `${update?.status ?? update?.state ?? update?.outcome ?? ''}`
+    .toLowerCase()
+    .trim();
+  if (status) {
+    if (
+      status.includes('complete') ||
+      status.includes('success') ||
+      status.includes('fail') ||
+      status.includes('error') ||
+      status.includes('cancel') ||
+      status.includes('done') ||
+      status.includes('finish') ||
+      status.includes('end')
+    ) {
+      return 'complete';
+    }
+  }
+
+  if (
+    update?.error ||
+    update?.result !== undefined ||
+    update?.output !== undefined ||
+    update?.exitCode !== undefined
+  ) {
+    return 'complete';
+  }
+
+  return 'update';
+}
+
+function toolStatusLabel(stage: ToolUiStage, update: any): string {
+  if (stage === 'start') return 'started';
+
+  const statusRaw = `${update?.status ?? update?.state ?? update?.outcome ?? ''}`
+    .toLowerCase()
+    .trim();
+
+  if (stage === 'complete') {
+    if (
+      statusRaw.includes('fail') ||
+      statusRaw.includes('error') ||
+      update?.error
+    ) {
+      return 'failed';
+    }
+    if (statusRaw.includes('cancel')) return 'cancelled';
+    return 'completed';
+  }
+
+  return statusRaw || 'running';
+}
+
+function extractToolCallId(update: any): string | null {
+  const candidates = [
+    update?.toolCallId,
+    update?.tool_call_id,
+    update?.callId,
+    update?.call_id,
+    update?.id,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const trimmed = candidate.trim();
+    if (trimmed) return trimmed;
+  }
+
+  return null;
 }
 
 function deriveResourceName(uri: string, index: number): string {

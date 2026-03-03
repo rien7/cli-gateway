@@ -15,6 +15,7 @@ export function createDiscordSink(
   userId: string,
 ): OutboundSink & { flush: () => Promise<void> } {
   const sendChannel = channel as unknown as SendableChannels;
+  const toolUiMessageById = new Map<string, string>();
 
   const buffered = createBufferedSink({
     maxLen: 1800,
@@ -78,6 +79,24 @@ export function createDiscordSink(
         embed.setDescription(
           `\`\`\`json\n${truncate(event.detail, 3800)}\n\`\`\``,
         );
+      }
+
+      if (event.kind === 'tool' && event.toolCallId?.trim()) {
+        const key = event.toolCallId.trim();
+        const existingId = toolUiMessageById.get(key);
+        if (existingId) {
+          try {
+            const existing = await sendChannel.messages.fetch(existingId);
+            await existing.edit({ embeds: [embed] });
+            return;
+          } catch {
+            // fall through and resend
+          }
+        }
+
+        const msg = await sendChannel.send({ embeds: [embed] });
+        toolUiMessageById.set(key, msg.id);
+        return;
       }
 
       await sendChannel.send({ embeds: [embed] });

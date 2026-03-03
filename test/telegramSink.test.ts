@@ -100,26 +100,41 @@ test('telegram sink private sendText uses standalone message path', async () => 
   assert.ok(calls.some((c) => c.method === 'sendMessage'));
 });
 
-test('telegram sink buffers summary tool UI until final flush in private chat', async () => {
+test('telegram sink updates tool UI by toolCallId in private chat', async () => {
   const { bot, calls } = createFakeBot();
   const sink = createTelegramSink(bot, 'token', 1, null, 'u1');
 
   await sink.sendUi!({
     kind: 'tool',
     mode: 'summary',
-    title: 'terminal/create',
+    title: 'terminal/create · started',
+    toolCallId: 'tc-1',
+    stage: 'start',
   });
 
-  assert.equal(calls.length, 0);
+  await sink.sendUi!({
+    kind: 'tool',
+    mode: 'summary',
+    title: 'terminal/create · running',
+    toolCallId: 'tc-1',
+    stage: 'update',
+  });
 
-  await sink.sendAgentText!('done');
-  await sink.flush();
+  await sink.sendUi!({
+    kind: 'tool',
+    mode: 'summary',
+    title: 'terminal/create · completed',
+    toolCallId: 'tc-1',
+    stage: 'complete',
+  });
 
-  const sentMessages = calls.filter((c) => c.method === 'sendMessage');
-  assert.equal(sentMessages.length, 2);
-  assert.equal(sentMessages[0].args[1], 'done');
-  assert.ok(String(sentMessages[1].args[1]).includes('[tools]'));
-  assert.ok(String(sentMessages[1].args[1]).includes('terminal/create'));
+  const sends = calls.filter((c) => c.method === 'sendMessage');
+  const edits = calls.filter((c) => c.method === 'editMessageText');
+
+  assert.equal(sends.length, 1);
+  assert.equal(edits.length, 2);
+  assert.ok(String(sends[0].args[1]).includes('started'));
+  assert.ok(String(edits[1].args[2]).includes('completed'));
 });
 
 test('telegram sink falls back to send+edit in group chat', async () => {

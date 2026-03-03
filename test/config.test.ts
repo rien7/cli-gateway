@@ -76,7 +76,7 @@ test('loadConfig bootstraps a default config file when missing', async () => {
     const file = configFilePath(resolveGatewayHomeDir());
     assert.ok(fs.existsSync(file));
 
-    assert.equal(cfg.uiDefaultMode, 'verbose');
+    assert.equal(cfg.uiDefaultMode, 'summary');
     assert.ok(path.isAbsolute(cfg.workspaceRoot));
     assert.ok(path.isAbsolute(cfg.dbPath));
   } finally {

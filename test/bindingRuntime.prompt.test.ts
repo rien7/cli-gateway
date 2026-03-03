@@ -231,7 +231,8 @@ class SummaryFilterRpc implements StdioProcess {
             params: {
               sessionId: this.sessionId,
               update: {
-                sessionUpdate: 'tool_call_update',
+                sessionUpdate: 'tool_call',
+                toolCallId: 'tc-1',
                 title: 'terminal/create',
               },
             },
@@ -244,7 +245,22 @@ class SummaryFilterRpc implements StdioProcess {
               sessionId: this.sessionId,
               update: {
                 sessionUpdate: 'tool_call_update',
+                toolCallId: 'tc-1',
                 title: 'terminal/create',
+              },
+            },
+          } as any);
+
+          this.emit({
+            jsonrpc: '2.0',
+            method: 'session/update',
+            params: {
+              sessionId: this.sessionId,
+              update: {
+                sessionUpdate: 'tool_call_update',
+                toolCallId: 'tc-1',
+                title: 'terminal/create',
+                status: 'completed',
               },
             },
           } as any);
@@ -331,8 +347,23 @@ class UiFlushRpc implements StdioProcess {
           params: {
             sessionId: this.sessionId,
             update: {
-              sessionUpdate: 'tool_call_update',
+              sessionUpdate: 'tool_call',
+              toolCallId: 'flush-1',
               title: 'terminal/create',
+            },
+          },
+        } as any);
+
+        this.emit({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: this.sessionId,
+            update: {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: 'flush-1',
+              title: 'terminal/create',
+              status: 'completed',
             },
           },
         } as any);
@@ -482,7 +513,11 @@ test('BindingRuntime prompt emits plan/tool UI and supports interactive permissi
   assert.equal(out.stopReason, 'end');
 
   assert.ok(uiEvents.some((e) => e.kind === 'plan'));
-  assert.ok(uiEvents.some((e) => e.kind === 'tool' && e.title === 'terminal/create'));
+  assert.ok(
+    uiEvents.some(
+      (e) => e.kind === 'tool' && e.title.startsWith('terminal/create ·'),
+    ),
+  );
   assert.ok(chunks.join('').includes('done'));
 
   // ensure allow decision granted exactly once
@@ -575,7 +610,11 @@ test('BindingRuntime summary filters call_* tool titles and keeps named tools', 
     .filter((e) => e.kind === 'tool')
     .map((e) => e.title);
 
-  assert.deepEqual(toolTitles, ['terminal/create']);
+  assert.deepEqual(toolTitles, [
+    'terminal/create · started',
+    'terminal/create · running',
+    'terminal/create · completed',
+  ]);
 
   rt.close();
   db.close();
@@ -681,7 +720,7 @@ test('BindingRuntime prompt waits for pending summary tool UI delivery', async (
   assert.ok(chunks.join('').includes('done'));
   assert.deepEqual(
     uiEvents.filter((e) => e.kind === 'tool').map((e) => e.title),
-    ['terminal/create'],
+    ['terminal/create · started', 'terminal/create · completed'],
   );
 
   rt.close();

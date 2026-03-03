@@ -73,7 +73,7 @@ function createConfigSchema(defaults: {
     runtimeIdleTtlSeconds: z.number().int().min(10).default(15 * 60),
     maxBindingRuntimes: z.number().int().min(1).max(200).default(30),
 
-    uiDefaultMode: z.enum(['verbose', 'summary']).default('verbose'),
+    uiDefaultMode: z.enum(['verbose', 'summary']).default('summary'),
     uiJsonMaxChars: z.number().int().min(200).max(200_000).default(12_000),
 
     contextReplayEnabled: z.boolean().default(true),
@@ -147,7 +147,7 @@ function createDefaultConfig(defaults: {
     dbPath: defaults.defaultDbPath,
     acpAgentCommand: 'npx',
     acpAgentArgs: ['-y', '@zed-industries/codex-acp@latest'],
-    uiDefaultMode: 'verbose',
+    uiDefaultMode: 'summary',
     schedulerEnabled: true,
   };
 }
@@ -225,7 +225,7 @@ async function runFirstTimeSetup(params: {
       dbPath,
       acpAgentCommand,
       acpAgentArgs: splitArgs(acpArgsRaw),
-      uiDefaultMode: 'verbose',
+      uiDefaultMode: 'summary',
       schedulerEnabled,
     };
 

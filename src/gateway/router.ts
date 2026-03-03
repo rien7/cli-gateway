@@ -836,7 +836,15 @@ function renderSessionUpdateDelta(update: any): string {
   }
 
   if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
-    return `\n[tool] ${update?.title ?? update?.toolCallId ?? 'tool_call'}`;
+    const id = String(update?.toolCallId ?? update?.id ?? '').trim();
+    const status =
+      update.sessionUpdate === 'tool_call'
+        ? 'started'
+        : String(update?.status ?? update?.state ?? 'running').trim() || 'running';
+    const title = String(update?.title ?? id ?? 'tool_call').trim() || 'tool_call';
+    return id
+      ? `\n[tool] ${title} · ${status} (${id})`
+      : `\n[tool] ${title} · ${status}`;
   }
 
   if (update.sessionUpdate === 'plan') {

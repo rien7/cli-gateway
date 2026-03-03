@@ -38,6 +38,8 @@ This document lists current gaps (vs a "production gateway") and the planned dir
 - Process guard script for auto-restart on abnormal exit (`scripts/run-guard.sh`).
 - Feishu inbound webhook + outbound send (MVP).
 - First-run interactive config wizard (TTY) + lock directory bootstrap.
+- Default UI mode switched to `summary` (conversation-level `/ui` override still supported).
+- Tool-call UI now tracks lifecycle (`start`/`update`/`complete`) keyed by tool-call id to reduce duplicate tool messages.
 
 ## Suggested Next Steps (Priority)
 

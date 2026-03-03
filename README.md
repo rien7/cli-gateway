@@ -131,10 +131,11 @@ Discord note:
 
 ## UI modes
 
-- `verbose` (default): show structured messages for tool execution + plan/task updates.
-- `summary`: quieter.
+- `summary` (default): quieter.
+- `verbose`: show structured messages for tool execution + plan/task updates.
 
 Set per conversation: `/ui verbose|summary`.
+Tool-call UI is lifecycle-based (`started`/`running`/`completed`) and updates by tool-call id when supported by the channel sink.
 
 ## Conversation isolation
 

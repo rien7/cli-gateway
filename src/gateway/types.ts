@@ -4,6 +4,7 @@ export type DeliveryState = {
 };
 
 export type UiMode = 'verbose' | 'summary';
+export type ToolUiStage = 'start' | 'update' | 'complete';
 
 export type PermissionUiRequest = {
   uiMode: UiMode;
@@ -25,6 +26,9 @@ export type UiEvent =
       mode: UiMode;
       title: string;
       detail?: string;
+      toolCallId?: string;
+      stage?: ToolUiStage;
+      status?: string;
     };
 
 export type OutboundSink = {

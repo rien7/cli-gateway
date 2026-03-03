@@ -1,7 +1,10 @@
 import { InlineKeyboard, type Bot } from 'grammy';
 
 import type { OutboundSink } from '../gateway/router.js';
+import type { UiEvent } from '../gateway/types.js';
 import { createBufferedSink } from './bufferedSink.js';
+
+type ToolUiEvent = Extract<UiEvent, { kind: 'tool' }>;
 
 export function createTelegramSink(
   bot: Bot,
@@ -14,6 +17,8 @@ export function createTelegramSink(
   },
 ): OutboundSink & { flush: () => Promise<void> } {
   const isPrivateChat = chatId > 0;
+  const toolUiMessageById = new Map<string, number>();
+  let toolUiFallbackSeq = 0;
 
   if (!isPrivateChat) {
     const buffered = createBufferedSink({
@@ -58,6 +63,18 @@ export function createTelegramSink(
         });
       },
       sendUi: async (event) => {
+        if (event.kind === 'tool') {
+          await upsertToolUiMessage({
+            bot,
+            chatId,
+            threadId,
+            event,
+            toolUiMessageById,
+            nextFallbackKey: () => `tool:${++toolUiFallbackSeq}`,
+          });
+          return;
+        }
+
         const safeTitle = truncate(event.title, 500);
         const header = `<b>[${escapeHtml(event.kind)}]</b> ${escapeHtml(safeTitle)}`;
 
@@ -98,8 +115,6 @@ export function createTelegramSink(
       });
     },
   });
-  const summaryToolTitles = new Set<string>();
-
   return {
     sendAgentText: agentBuffered.sendText,
     sendText: async (delta: string) => {
@@ -110,15 +125,6 @@ export function createTelegramSink(
     },
     flush: async () => {
       await agentBuffered.flush();
-
-      if (summaryToolTitles.size > 0) {
-        const toolLines = [...summaryToolTitles].map((title) => `- ${title}`).join('\n');
-        const toolSummary = truncate(`[tools]\n${toolLines}`, 4096);
-        await bot.api.sendMessage(chatId, toolSummary, {
-          message_thread_id: threadId ?? undefined,
-        });
-        summaryToolTitles.clear();
-      }
     },
     getDeliveryState: agentBuffered.getState,
     requestPermission: async (req) => {
@@ -141,11 +147,15 @@ export function createTelegramSink(
       });
     },
     sendUi: async (event) => {
-      if (event.mode === 'summary' && event.kind === 'tool') {
-        const title = event.title.trim();
-        if (title) {
-          summaryToolTitles.add(truncate(title, 200));
-        }
+      if (event.kind === 'tool') {
+        await upsertToolUiMessage({
+          bot,
+          chatId,
+          threadId,
+          event,
+          toolUiMessageById,
+          nextFallbackKey: () => `tool:${++toolUiFallbackSeq}`,
+        });
         return;
       }
 
@@ -171,6 +181,51 @@ export function createTelegramSink(
       });
     },
   };
+}
+
+async function upsertToolUiMessage(params: {
+  bot: Bot;
+  chatId: number;
+  threadId: number | null;
+  event: ToolUiEvent;
+  toolUiMessageById: Map<string, number>;
+  nextFallbackKey: () => string;
+}): Promise<void> {
+  const key = params.event.toolCallId?.trim() || params.nextFallbackKey();
+  const text = formatToolUiText(params.event);
+  const existingId = params.toolUiMessageById.get(key);
+
+  if (!existingId) {
+    const msg = await params.bot.api.sendMessage(params.chatId, text, {
+      message_thread_id: params.threadId ?? undefined,
+      parse_mode: 'HTML',
+    });
+    params.toolUiMessageById.set(key, msg.message_id);
+    return;
+  }
+
+  try {
+    await params.bot.api.editMessageText(params.chatId, existingId, text, {
+      ...(params.threadId ? ({ message_thread_id: params.threadId } as any) : {}),
+      parse_mode: 'HTML',
+    });
+  } catch {
+    const msg = await params.bot.api.sendMessage(params.chatId, text, {
+      message_thread_id: params.threadId ?? undefined,
+      parse_mode: 'HTML',
+    });
+    params.toolUiMessageById.set(key, msg.message_id);
+  }
+}
+
+function formatToolUiText(event: ToolUiEvent): string {
+  const safeTitle = truncate(event.title, 500);
+  const header = `<b>[tool]</b> ${escapeHtml(safeTitle)}`;
+  if (event.detail && event.mode === 'verbose') {
+    const code = escapeHtml(truncate(event.detail, 3200));
+    return `${header}\n\n<pre><code>${code}</code></pre>`;
+  }
+  return header;
 }
 
 function truncate(text: string, maxLen: number): string {
