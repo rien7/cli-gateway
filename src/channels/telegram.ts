@@ -152,32 +152,48 @@ export async function startTelegram(
       // Do not await: grammY processes updates sequentially.
       // Awaiting here deadlocks permission flow (callback_query can't be handled).
       // Emoji reaction: acknowledge that we're processing.
-      void (bot.api as any)
-        .setMessageReaction(ctx.chat.id, ctx.message.message_id, {
-          reaction: [{ type: 'emoji', emoji: '🤔' }],
-          is_big: false,
-        })
-        .catch(() => {
-          // ignore
-        });
+      void setMessageReaction(
+        config.telegramToken,
+        {
+          chatId: ctx.chat.id,
+          messageId: ctx.message.message_id,
+          emoji: '🤔',
+          isBig: false,
+        },
+        fetch,
+      ).catch(() => {
+        // ignore
+      });
 
       const p = router.handleUserMessage(key, text, sink);
 
       // Emoji reaction: final status.
       void p
         .then(async () => {
-          await (bot.api as any).setMessageReaction(ctx.chat.id, ctx.message.message_id, {
-            reaction: [{ type: 'emoji', emoji: '🕊' }],
-            is_big: false,
-          });
+          await setMessageReaction(
+            config.telegramToken,
+            {
+              chatId: ctx.chat.id,
+              messageId: ctx.message.message_id,
+              emoji: '🕊',
+              isBig: false,
+            },
+            fetch,
+          );
         })
         .catch(async (error) => {
           log.error('Telegram router handler error', error);
           try {
-            await (bot.api as any).setMessageReaction(ctx.chat.id, ctx.message.message_id, {
-              reaction: [{ type: 'emoji', emoji: '😢' }],
-              is_big: false,
-            });
+            await setMessageReaction(
+              config.telegramToken,
+              {
+                chatId: ctx.chat.id,
+                messageId: ctx.message.message_id,
+                emoji: '😢',
+                isBig: false,
+              },
+              fetch,
+            );
           } catch {
             // ignore
           }
