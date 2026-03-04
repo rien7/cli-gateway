@@ -77,14 +77,38 @@ npm run dev
 
 ## Process Guard (Auto Restart)
 
-For crash protection in long-running deployments:
+For crash protection in long-running deployments, `run-guard.sh` now runs as a background daemon with `nohup`, supports lifecycle commands, and automatically updates/builds on startup.
+
+Start guard (default app command: `node dist/main.js`):
 
 ```bash
-npm run build
 npm run start:guard
 ```
 
-`scripts/run-guard.sh` restarts `cli-gateway` when it exits abnormally, with exponential backoff.
+Restart/stop/status/logs:
+
+```bash
+bash scripts/run-guard.sh restart
+bash scripts/run-guard.sh stop
+bash scripts/run-guard.sh status
+bash scripts/run-guard.sh logs
+```
+
+Custom command is supported:
+
+```bash
+bash scripts/run-guard.sh start -- npm run dev
+bash scripts/run-guard.sh restart -- npm run dev
+```
+
+`start`/`restart` automatically runs:
+
+```bash
+npm i
+npm run build
+```
+
+Then guard keeps restarting the app on abnormal exit with exponential backoff.
 
 Useful env vars:
 
@@ -92,6 +116,9 @@ Useful env vars:
 - `RESTART_MAX_DELAY_SECONDS` (default `30`)
 - `RESTART_MAX_ATTEMPTS` (default `0`, unlimited)
 - `RESTART_ON_EXIT_0` (default `0`)
+- `STOP_TIMEOUT_SECONDS` (default `20`)
+- `SKIP_UPDATE=1` to skip `npm i` + `npm run build`
+- `GUARD_STATE_DIR` to override pid/log directory (default `./.run-guard`)
 
 ## Feishu setup (MVP)
 

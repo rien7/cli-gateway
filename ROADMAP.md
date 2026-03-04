@@ -36,6 +36,7 @@ This document lists current gaps (vs a "production gateway") and the planned dir
 - Interactive permission buttons on Discord/Telegram (Allow/Deny).
 - Discord built-in slash command registration + handling (`/help`, `/ui`, `/cli`, `/workspace`, `/new`, `/last`, `/replay`, `/allow`, `/deny`, `/cron`).
 - Process guard script for auto-restart on abnormal exit (`scripts/run-guard.sh`).
+- Process guard supports daemon lifecycle commands (`start/stop/restart/status/logs`) with `nohup` background mode and auto `npm i && npm run build` on `start/restart`.
 - Feishu inbound webhook + outbound send (MVP).
 - First-run interactive config wizard (TTY) + lock directory bootstrap.
 - Default UI mode switched to `summary` (conversation-level `/ui` override still supported).
