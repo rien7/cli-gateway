@@ -9,7 +9,7 @@ This file is for coding agents (Codex/Claude/etc) working in this repository.
 - Discord + Telegram + Feishu adapters
 - Per-binding ACP stdio runtime isolation (one agent process per binding)
 - SQLite persistence (sessions/bindings/runs/events/jobs)
-- Deny-by-default tool execution via ACP `session/request_permission` (interactive buttons on DC/TG)
+- Deny-by-default tool execution via ACP `session/request_permission` (interactive buttons on DC/TG + Discord reaction shortcuts)
 
 ## Key paths
 

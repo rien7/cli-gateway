@@ -76,6 +76,15 @@ export type AcpClientEvents = {
   onAgentStderr?: (line: string) => void;
 };
 
+type PendingRequest = {
+  method: string;
+  resolve: (res: JsonRpcResponse) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout | null;
+};
+
+const ACP_BOOTSTRAP_TIMEOUT_MS = 30_000;
+
 export class AcpClient {
   private readonly db: Db;
   private readonly workspaceRoot: string;
@@ -86,10 +95,7 @@ export class AcpClient {
   private readonly rpc: StdioProcess;
   private nextId = 1;
 
-  private readonly pending = new Map<
-    JsonRpcId,
-    (res: JsonRpcResponse) => void
-  >();
+  private readonly pending = new Map<JsonRpcId, PendingRequest>();
 
   // run-scoped state
   private currentRun: AcpRun | null = null;
@@ -117,9 +123,21 @@ export class AcpClient {
       params.rpc ?? spawnAcpAgent(this.agentCommand, this.agentArgs);
     this.rpc.onMessage((m) => this.handleMessage(m));
     this.rpc.onStderr((line) => this.events.onAgentStderr?.(line));
+    this.rpc.onExit?.((info) => {
+      this.rejectAllPending(
+        this.makeTransportError(
+          'ACP agent exited (code=' +
+            String(info.code) +
+            ', signal=' +
+            String(info.signal) +
+            ')',
+        ),
+      );
+    });
   }
 
   close(): void {
+    this.rejectAllPending(this.makeTransportError('ACP client closed'));
     this.rpc.kill();
   }
 
@@ -144,6 +162,7 @@ export class AcpClient {
     this.initPromise = this.request<InitializeParams, InitializeResult>(
       'initialize',
       params,
+      ACP_BOOTSTRAP_TIMEOUT_MS,
     );
 
     return this.initPromise;
@@ -153,6 +172,7 @@ export class AcpClient {
     return this.request<NewSessionParams, NewSessionResult>(
       'session/new',
       params,
+      ACP_BOOTSTRAP_TIMEOUT_MS,
     );
   }
 
@@ -200,10 +220,13 @@ export class AcpClient {
 
   private handleMessage(message: JsonRpcMessage): void {
     if (isResponse(message)) {
-      const handler = this.pending.get(message.id);
-      if (handler) {
+      const pending = this.pending.get(message.id);
+      if (pending) {
         this.pending.delete(message.id);
-        handler(message);
+        if (pending.timer) {
+          clearTimeout(pending.timer);
+        }
+        pending.resolve(message);
       }
       return;
     }
@@ -398,29 +421,82 @@ export class AcpClient {
   private request<TParams, TResult>(
     method: string,
     params: TParams,
+    timeoutMs?: number,
   ): Promise<TResult> {
     const id = this.nextId++;
 
-    const req: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
-    this.rpc.write(req);
-
     return new Promise<TResult>((resolve, reject) => {
-      this.pending.set(id, (res) => {
-        if ('error' in res) {
-          const code =
-            typeof res.error?.code === 'number'
-              ? ` (code ${res.error.code})`
-              : '';
-          const data =
-            res.error?.data !== undefined
-              ? `; data=${String(res.error.data)}`
-              : '';
-          reject(new Error(`${res.error.message}${code}${data}`));
-          return;
-        }
-        resolve(res.result as TResult);
+      const timer =
+        timeoutMs && timeoutMs > 0
+          ? setTimeout(() => {
+              this.rejectPendingRequest(
+                id,
+                this.makeTransportError(
+                  'ACP request timed out: ' + method + ' (' + String(timeoutMs) + 'ms)',
+                ),
+              );
+            }, timeoutMs)
+          : null;
+
+      this.pending.set(id, {
+        method,
+        resolve: (res) => {
+          if ('error' in res) {
+            const code =
+              typeof res.error?.code === 'number'
+                ? ' (code ' + String(res.error.code) + ')'
+                : '';
+            const data =
+              res.error?.data !== undefined
+                ? '; data=' + String(res.error.data)
+                : '';
+            reject(new Error(String(res.error.message) + code + data));
+            return;
+          }
+
+          resolve(res.result as TResult);
+        },
+        reject,
+        timer,
       });
+
+      try {
+        const req: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
+        this.rpc.write(req);
+      } catch (error: any) {
+        this.rejectPendingRequest(
+          id,
+          this.makeTransportError(String(error?.message ?? error)),
+        );
+      }
     });
+  }
+
+  private rejectPendingRequest(id: JsonRpcId, error: Error): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+
+    this.pending.delete(id);
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
+
+    pending.reject(error);
+  }
+
+  private rejectAllPending(error: Error): void {
+    for (const id of this.pending.keys()) {
+      const detail = this.makeTransportError(
+        error.message + '; pending_id=' + String(id),
+      );
+      this.rejectPendingRequest(id, detail);
+    }
+  }
+
+  private makeTransportError(message: string): Error {
+    const err = new Error(message);
+    err.name = 'AcpTransportError';
+    return err;
   }
 
   private respond(id: JsonRpcId, result: unknown): void {
@@ -462,7 +538,7 @@ export class AcpClient {
 
     const ok = this.toolAuth.consume(sessionKey, kind);
     if (!ok) {
-      throw new Error(`Tool call denied by policy: ${kind}`);
+      throw new Error(`Tool call denied by policy: ${kind}. Approve in permission UI (Allow) or use /allow <n>.`);
     }
   }
 

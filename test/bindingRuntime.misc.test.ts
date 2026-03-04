@@ -671,6 +671,114 @@ test('BindingRuntime prompt supports sendAgentText and fallback text UI renderin
   db.close();
 });
 
+test('BindingRuntime breaks text stream once per tool call id', async () => {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  migrate(db);
+
+  const key: ConversationKey = {
+    platform: 'discord',
+    chatId: 'c-break',
+    threadId: null,
+    userId: 'u-break',
+  };
+
+  const sessionKey = 's-break';
+  createSession(db, {
+    sessionKey,
+    agentCommand: 'agent',
+    agentArgs: [],
+    cwd: '/tmp',
+    loadSupported: false,
+  });
+  const bindingKey = upsertBinding(db, key, sessionKey).bindingKey;
+  createRun(db, { runId: 'r-break', sessionKey, promptText: '' });
+
+  const rpc = new BranchingRpc({
+    loadSession: false,
+    updates: [
+      {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'before tool' },
+      },
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-break-1',
+        title: 'Read src/main.ts',
+      },
+      {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc-break-1',
+        status: 'completed',
+      },
+      {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'after tool' },
+      },
+    ],
+  });
+
+  const rt = new BindingRuntime({
+    db,
+    config: {
+      discordToken: undefined,
+      discordAllowChannelId: undefined,
+      telegramToken: undefined,
+      feishuAppId: undefined,
+      feishuAppSecret: undefined,
+      feishuVerificationToken: undefined,
+      feishuListenPort: 3030,
+      acpAgentCommand: 'node',
+      acpAgentArgs: [],
+      workspaceRoot: '/tmp',
+      dbPath: ':memory:',
+      schedulerEnabled: false,
+      runtimeIdleTtlSeconds: 999,
+      maxBindingRuntimes: 5,
+      uiDefaultMode: 'verbose',
+      uiJsonMaxChars: 1000,
+      contextReplayEnabled: false,
+      contextReplayRuns: 0,
+      contextReplayMaxChars: 0,
+    } as any,
+    toolAuth: new ToolAuth(db),
+    sessionKey,
+    bindingKey,
+    acpRpc: rpc,
+    workspaceRoot: '/tmp',
+  });
+
+  const chunks: string[] = [];
+  const breaks: number[] = [];
+  const uiTitles: string[] = [];
+
+  const sink: OutboundSink = {
+    sendText: async () => {},
+    sendAgentText: async (t) => chunks.push(t),
+    breakTextStream: async () => {
+      breaks.push(Date.now());
+    },
+    sendUi: async (event) => {
+      if (event.kind === 'tool') uiTitles.push(event.title);
+    },
+  };
+
+  const result = await rt.prompt({
+    runId: 'r-break',
+    promptText: 'go',
+    sink,
+    uiMode: 'summary',
+  });
+
+  assert.equal(result.stopReason, 'end');
+  assert.equal(chunks.join(''), 'before toolafter tool');
+  assert.equal(breaks.length, 1);
+  assert.equal(uiTitles.length, 2);
+
+  rt.close();
+  db.close();
+});
+
 test('buildToolUiEvent infers actionable titles and detail fields across branches', () => {
   const db = new Database(':memory:');
   db.pragma('foreign_keys = ON');

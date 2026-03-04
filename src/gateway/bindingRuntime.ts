@@ -35,6 +35,7 @@ export class BindingRuntime {
   private currentActorUserId: string | null = null;
   private sinkWriteQueue: Promise<void> = Promise.resolve();
   private toolCallTitles = new Map<string, string>();
+  private toolCallTextBreaks = new Set<string>();
 
   private readonly workspaceRoot: string;
   private readonly agentCommand: string;
@@ -96,6 +97,10 @@ export class BindingRuntime {
             ) {
               const ui = this.buildToolUiEvent(update);
               if (!ui) return;
+
+              if (this.shouldBreakTextStreamForToolUpdate(update, ui.toolCallId)) {
+                await sink.breakTextStream?.();
+              }
 
               const detail =
                 this.currentUiMode === 'verbose'
@@ -448,6 +453,7 @@ export class BindingRuntime {
       this.activeSink = params.sink;
       this.sinkWriteQueue = Promise.resolve();
       this.toolCallTitles = new Map<string, string>();
+      this.toolCallTextBreaks = new Set<string>();
 
       try {
         const run = {
@@ -493,6 +499,7 @@ export class BindingRuntime {
         this.currentUiMode = 'verbose';
         this.currentActorUserId = null;
         this.toolCallTitles = new Map<string, string>();
+        this.toolCallTextBreaks = new Set<string>();
       }
     });
 
@@ -561,6 +568,24 @@ export class BindingRuntime {
       stage,
       status,
     };
+  }
+
+  private shouldBreakTextStreamForToolUpdate(
+    update: any,
+    toolCallId?: string,
+  ): boolean {
+    const kind = String(update?.sessionUpdate ?? '').trim();
+    if (kind !== 'tool_call' && kind !== 'tool_call_update') return false;
+
+    if (toolCallId) {
+      if (this.toolCallTextBreaks.has(toolCallId)) {
+        return false;
+      }
+      this.toolCallTextBreaks.add(toolCallId);
+      return true;
+    }
+
+    return kind === 'tool_call';
   }
 }
 

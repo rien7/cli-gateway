@@ -139,6 +139,8 @@ Feishu currently runs in webhook event-subscription mode:
 - `/replay [runId]` replay stored `session/update` output for a run (best-effort)
 - `/ui verbose|summary` set UI verbosity for this conversation
 - `/cli show|codex|claude` show/switch ACP CLI preset for this conversation
+- Claude preset uses `@zed-industries/claude-code-acp`; make sure Claude auth is available (for example `ANTHROPIC_API_KEY` or Claude `/login`).
+- ACP startup failures now fail fast (exit/timeout) and return an explicit error instead of hanging the conversation.
 - `/workspace show|~|~/...|/abs/path` show/set per-conversation workspace root (alias: `/ws`)
 - `/help` also includes ACP `available_commands_update` entries as `cli-inline` commands (best-effort)
 
@@ -149,12 +151,13 @@ Discord note:
 - Built-in commands are available as slash commands (`/help`, `/ui`, `/cli`, `/workspace`, `/new`, `/last`, `/replay`, `/allow`, `/deny`, `/cron`).
 - Slash commands are synced at startup (global + per-guild best-effort). Global command propagation may take time on Discord side.
 - ACP `cli-inline` dynamic commands are not yet exposed as Discord slash commands.
+- Inbound message processing uses reaction acks (`🤔` while running, then `🕊` on success or `😢` on error), aligned with Telegram behavior.
 
 ## Security model (default)
 
 - File system and terminal tool calls are restricted to the active workspace root (per conversation; see `/workspace`).
 - Tool execution is **deny-by-default**; the user must approve via ACP permission flow.
-- Approvals are interactive (buttons) on Discord/Telegram; `/allow`/`/deny` remain as fallback.
+- Approvals are interactive on Discord/Telegram (buttons). Discord permission cards also add reaction shortcuts (`👍` allow, `👎` deny; `✅`/`❌` still accepted); `/allow`/`/deny` remain as fallback.
 - You can persist policy choices (e.g. `allow_always` / `reject_always`) per conversation.
 
 ## UI modes
@@ -164,6 +167,7 @@ Discord note:
 
 Set per conversation: `/ui verbose|summary`.
 Tool-call UI is lifecycle-based (`started`/`running`/`completed`) and updates by tool-call id when supported by the channel sink.
+Agent text is streamed by editing one message while output is text-only; when a tool call starts, the next agent text segment resumes in a new message.
 
 ## Conversation isolation
 

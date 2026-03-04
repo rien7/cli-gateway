@@ -6,11 +6,18 @@ import { createDiscordSink } from '../src/channels/discordSink.js';
 function createFakeChannel() {
   const sent: any[] = [];
   const edits: any[] = [];
+  const reactions: Array<{ id: string; emoji: string }> = [];
 
   const channel = {
     send: async (payload: any) => {
       sent.push(payload);
-      return { id: String(sent.length) };
+      const id = String(sent.length);
+      return {
+        id,
+        react: async (emoji: string) => {
+          reactions.push({ id, emoji });
+        },
+      };
     },
     messages: {
       fetch: async (id: string) => ({
@@ -21,11 +28,11 @@ function createFakeChannel() {
     },
   } as any;
 
-  return { channel, sent, edits };
+  return { channel, sent, edits, reactions };
 }
 
 test('discord sink renders permission as embed + buttons', async () => {
-  const { channel, sent } = createFakeChannel();
+  const { channel, sent, reactions } = createFakeChannel();
 
   const sink = createDiscordSink(channel, 'user1');
 
@@ -41,6 +48,10 @@ test('discord sink renders permission as embed + buttons', async () => {
   assert.ok(msg.embeds?.length);
   assert.ok(msg.components?.length);
   assert.ok(String(msg.content).includes('<@user1>'));
+  assert.deepEqual(
+    reactions.map((item) => item.emoji),
+    ['👍', '👎'],
+  );
 });
 
 test('discord sink renders UI events as embed', async () => {

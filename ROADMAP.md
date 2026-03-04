@@ -42,6 +42,9 @@ This document lists current gaps (vs a "production gateway") and the planned dir
 - Default UI mode switched to `summary` (conversation-level `/ui` override still supported).
 - Tool-call UI now tracks lifecycle (`start`/`update`/`complete`) keyed by tool-call id to reduce duplicate tool messages.
 - Conversation preferences can now be changed before first prompt (`/ui`, `/workspace`, `/cli`) and survive `/new` session reset.
+- ACP transport now fails fast on child exit/bootstrap timeout, returning explicit errors instead of leaving runs hanging.
+- Discord permission approvals now support emoji reactions (`✅`/`👍` allow, `❌`/`👎` deny) in addition to buttons.
+- Agent text streaming now auto-splits around tool calls (text-only updates keep editing one message; post-tool assistant output resumes in a new message).
 
 ## Suggested Next Steps (Priority)
 

@@ -51,8 +51,15 @@ export async function startDiscord(
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.DirectMessages,
       GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildMessageReactions,
+      GatewayIntentBits.DirectMessageReactions,
     ],
-    partials: [Partials.Channel],
+    partials: [
+      Partials.Channel,
+      Partials.Message,
+      Partials.Reaction,
+      Partials.User,
+    ],
   });
 
   const slashCommands = buildDiscordSlashCommands();
@@ -92,17 +99,10 @@ export async function startDiscord(
 
       if (!interaction.isButton()) return;
 
-      const id = interaction.customId;
-      if (!id.startsWith('acpperm:')) return;
+      const parsed = parsePermissionCustomId(interaction.customId);
+      if (!parsed) return;
 
-      const parts = id.split(':');
-      const sessionKey = parts[1] ?? '';
-      const requestId = parts[2] ?? '';
-      const decision = parts[3] ?? '';
-
-      if (!sessionKey || !requestId || (decision !== 'allow' && decision !== 'deny')) {
-        return;
-      }
+      const { sessionKey, requestId, decision } = parsed;
 
       const res = await router.handlePermissionUi({
         platform: 'discord',
@@ -121,9 +121,47 @@ export async function startDiscord(
         return;
       }
 
-      await interaction.update({ content: res.message, components: [] });
+      const prefix = decision === 'allow' ? '✅' : '❌';
+      await interaction.update({
+        content: prefix + ' ' + res.message,
+        components: [],
+      });
     } catch (error) {
       log.error('Discord interaction handler error', error);
+    }
+  });
+
+  client.on('messageReactionAdd', async (reaction, user) => {
+    try {
+      if (user.bot) return;
+
+      const decision = permissionDecisionFromEmoji(reaction.emoji.name);
+      if (!decision) return;
+
+      const message = reaction.message.partial
+        ? await reaction.message.fetch()
+        : reaction.message;
+
+      const route = extractPermissionRouteFromComponents(message.components);
+      if (!route) return;
+
+      const res = await router.handlePermissionUi({
+        platform: 'discord',
+        sessionKey: route.sessionKey,
+        requestId: route.requestId,
+        decision,
+        actorUserId: user.id,
+      });
+
+      if (!res.ok) {
+        await message.reply(res.message);
+        return;
+      }
+
+      const prefix = decision === 'allow' ? '✅' : '❌';
+      await message.edit({ content: prefix + ' ' + res.message, components: [] });
+    } catch (error) {
+      log.error('Discord reaction handler error', error);
     }
   });
 
@@ -144,6 +182,9 @@ export async function startDiscord(
       );
       if (!text.trim() && resources.length === 0) return;
 
+      // Telegram parity: first-stage ack reaction while processing.
+      await setDiscordInboundReaction(message, '🤔');
+
       const key: ConversationKey = {
         platform: 'discord',
         chatId: message.channelId,
@@ -157,8 +198,10 @@ export async function startDiscord(
       const sink = createDiscordSink(channel, message.author.id);
 
       await router.handleUserMessage(key, text, sink, { resources });
+      await finalizeDiscordInboundReaction(message, '🕊');
     } catch (error) {
       log.error('Discord message handler error', error);
+      await finalizeDiscordInboundReaction(message, '😢');
     }
   });
 
@@ -361,19 +404,21 @@ export function createDiscordInteractionSink(
     if (!hasResponded) {
       hasResponded = true;
       if (interaction.deferred) {
-        await interaction.editReply({
+        const msg = await interaction.editReply({
           content: `<@${interaction.user.id}>`,
           embeds: [embed],
           components: [row],
         });
+        await addDiscordPermissionReactions(msg);
         return;
       }
       if (interaction.replied) {
-        await interaction.followUp({
+        const msg = await interaction.followUp({
           content: `<@${interaction.user.id}>`,
           embeds: [embed],
           components: [row],
         });
+        await addDiscordPermissionReactions(msg);
         return;
       }
       await interaction.reply({
@@ -381,19 +426,32 @@ export function createDiscordInteractionSink(
         embeds: [embed],
         components: [row],
       });
+      const msg = await interaction.fetchReply();
+      await addDiscordPermissionReactions(msg);
       return;
     }
 
-    await interaction.followUp({
+    const msg = await interaction.followUp({
       content: `<@${interaction.user.id}>`,
       embeds: [embed],
       components: [row],
     });
+    await addDiscordPermissionReactions(msg);
   };
 
   return {
     sendText: async (delta) => {
       text += delta;
+    },
+    breakTextStream: async () => {
+      const out = text.trim();
+      text = '';
+      if (!out) return;
+
+      const chunks = splitText(out, 1900);
+      for (const chunk of chunks) {
+        await sendChunk(chunk);
+      }
     },
     flush: async () => {
       const out = text.trim();
@@ -434,4 +492,148 @@ function splitText(text: string, maxLen: number): string[] {
 function truncate(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return text.slice(0, maxLen - 3) + '...';
+}
+
+type PermissionDecision = 'allow' | 'deny';
+
+type PermissionRoute = {
+  sessionKey: string;
+  requestId: string;
+};
+
+export function parsePermissionCustomId(
+  customId: string,
+): (PermissionRoute & { decision: PermissionDecision }) | null {
+  if (!customId.startsWith('acpperm:')) return null;
+
+  const parts = customId.split(':');
+  const sessionKey = String(parts[1] ?? '').trim();
+  const requestId = String(parts[2] ?? '').trim();
+  const decision = String(parts[3] ?? '').trim();
+
+  if (!sessionKey || !requestId) return null;
+  if (decision !== 'allow' && decision !== 'deny') return null;
+
+  return {
+    sessionKey,
+    requestId,
+    decision,
+  };
+}
+
+export function permissionDecisionFromEmoji(
+  emojiName: string | null,
+): PermissionDecision | null {
+  const value = String(emojiName ?? '').trim();
+  if (!value) return null;
+
+  if (value === '✅' || value === '👍') return 'allow';
+  if (value === '❌' || value === '👎') return 'deny';
+  return null;
+}
+
+export function extractPermissionRouteFromComponents(
+  components: unknown,
+): PermissionRoute | null {
+  if (!Array.isArray(components) || components.length === 0) return null;
+
+  for (const row of components) {
+    if (!isRecord(row)) continue;
+
+    const items = row.components;
+    if (!Array.isArray(items)) continue;
+
+    for (const item of items) {
+      if (!isRecord(item)) continue;
+
+      const parsed = parsePermissionCustomId(String(item.customId ?? ''));
+      if (!parsed) continue;
+      return { sessionKey: parsed.sessionKey, requestId: parsed.requestId };
+    }
+  }
+
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+async function setDiscordInboundReaction(
+  message: unknown,
+  emoji: string,
+): Promise<void> {
+  if (
+    !message ||
+    typeof message !== 'object' ||
+    typeof (message as { react?: unknown }).react !== 'function'
+  ) {
+    return;
+  }
+
+  const react = (message as { react: (nextEmoji: string) => Promise<unknown> }).react;
+  try {
+    await react(emoji);
+  } catch {
+    // best effort
+  }
+}
+
+async function finalizeDiscordInboundReaction(
+  message: unknown,
+  emoji: string,
+): Promise<void> {
+  await clearDiscordInboundReaction(message, '🤔');
+  await setDiscordInboundReaction(message, emoji);
+}
+
+async function clearDiscordInboundReaction(
+  message: unknown,
+  emoji: string,
+): Promise<void> {
+  if (!message || typeof message !== 'object') return;
+
+  const clientUserId = String(
+    (message as { client?: { user?: { id?: string } } }).client?.user?.id ?? '',
+  ).trim();
+  if (!clientUserId) return;
+
+  const reactions = (message as { reactions?: unknown }).reactions as
+    | {
+        resolve?: (value: string) => { users?: { remove?: (userId: string) => Promise<unknown> } } | null;
+      }
+    | undefined;
+  if (!reactions || typeof reactions.resolve !== 'function') return;
+
+  const reaction = reactions.resolve(emoji);
+  const remove = reaction?.users?.remove;
+  if (typeof remove !== 'function') return;
+
+  try {
+    await remove(clientUserId);
+  } catch {
+    // best effort
+  }
+}
+
+async function addDiscordPermissionReactions(message: unknown): Promise<void> {
+  if (
+    !message ||
+    typeof message !== 'object' ||
+    typeof (message as { react?: unknown }).react !== 'function'
+  ) {
+    return;
+  }
+
+  const react = (message as { react: (emoji: string) => Promise<unknown> }).react;
+  try {
+    await react('👍');
+  } catch {
+    // best-effort shortcut; buttons still available
+  }
+  try {
+    await react('👎');
+  } catch {
+    // best-effort shortcut; buttons still available
+  }
 }

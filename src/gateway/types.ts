@@ -36,6 +36,9 @@ export type OutboundSink = {
   // Telegram private chats stream this via sendMessageDraft.
   sendAgentText?: (text: string) => Promise<void>;
   sendText: (text: string) => Promise<void>;
+  // Force subsequent assistant chunks to continue in a new outgoing message.
+  // Useful when switching between agent text and tool UI updates.
+  breakTextStream?: () => Promise<void>;
   flush?: () => Promise<void>;
   getDeliveryState?: () => DeliveryState;
 

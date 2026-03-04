@@ -313,3 +313,84 @@ test('router forwards image resources as prompt resource_link blocks', async () 
   router.close();
   db.close();
 });
+
+test('router recycles runtime after ACP transport error', async () => {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  migrate(db);
+
+  const workspaceRoot = fs.mkdtempSync('/tmp/cli-gateway-router-');
+
+  const key: ConversationKey = {
+    platform: 'discord',
+    chatId: 'c-transport',
+    threadId: null,
+    userId: 'u-transport',
+  };
+
+  const sessionKey = 's-transport';
+  createSession(db, {
+    sessionKey,
+    agentCommand: 'agent',
+    agentArgs: [],
+    cwd: workspaceRoot,
+    loadSupported: false,
+  });
+  upsertBinding(db, key, sessionKey);
+
+  let closeCalled = 0;
+
+  const router = new GatewayRouter({
+    db,
+    config: {
+      discordToken: undefined,
+      discordAllowChannelId: undefined,
+      telegramToken: undefined,
+      feishuAppId: undefined,
+      feishuAppSecret: undefined,
+      feishuVerificationToken: undefined,
+      feishuListenPort: 3030,
+      acpAgentCommand: 'node',
+      acpAgentArgs: [],
+      workspaceRoot,
+      dbPath: ':memory:',
+      schedulerEnabled: false,
+      runtimeIdleTtlSeconds: 999,
+      maxBindingRuntimes: 5,
+      uiDefaultMode: 'verbose',
+      uiJsonMaxChars: 10_000,
+      contextReplayEnabled: false,
+      contextReplayRuns: 0,
+      contextReplayMaxChars: 0,
+    } as any,
+    runtimeFactory: () =>
+      ({
+        close: () => {
+          closeCalled += 1;
+        },
+        hasSessionId: () => false,
+        prompt: async () => {
+          const err = new Error('ACP agent exited (code=1, signal=null)');
+          (err as any).name = 'AcpTransportError';
+          throw err;
+        },
+      }) as any,
+  });
+
+  const texts: string[] = [];
+  const sink = {
+    sendText: async (value: string) => {
+      texts.push(value);
+    },
+    flush: async () => {},
+  };
+
+  await router.handleUserMessage(key, 'hello', sink as any);
+
+  assert.equal(closeCalled, 1);
+  assert.equal((router as any).runtimesBySessionKey.size, 0);
+  assert.ok(texts.some((t) => t.includes('ACP agent exited')));
+
+  router.close();
+  db.close();
+});

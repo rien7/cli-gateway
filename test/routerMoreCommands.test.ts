@@ -161,6 +161,17 @@ test('/cli show and switch updates session agent config', async () => {
   await router.handleUserMessage(key, '/cli claude', sink as any);
   assert.ok(String(texts.at(-1)).includes('OK: CLI switched to Claude Code'));
 
+  const claudeRow = db
+    .prepare(
+      'SELECT agent_command as command, agent_args_json as argsJson FROM sessions WHERE session_key = ?',
+    )
+    .get(binding.sessionKey) as { command: string; argsJson: string };
+  assert.equal(claudeRow.command, 'npx');
+  assert.deepEqual(JSON.parse(claudeRow.argsJson), [
+    '-y',
+    '@zed-industries/claude-code-acp@latest',
+  ]);
+
   router.close();
 });
 

@@ -123,3 +123,34 @@ test('buffered sink ignores no-op edit errors and avoids duplicate send', async 
   assert.equal(sent.length, 1);
   assert.equal(sent[0], 'hello');
 });
+
+test('buffered sink breakMessage flushes and starts a new message', async () => {
+  const sent: Array<{ id: string; text: string }> = [];
+  const edits: Array<{ id: string; text: string }> = [];
+
+  const sink = createBufferedSink({
+    maxLen: 100,
+    flushIntervalMs: 1000,
+    send: async (text) => {
+      const id = String(sent.length + 1);
+      sent.push({ id, text });
+      return { id };
+    },
+    edit: async (id, text) => {
+      edits.push({ id, text });
+    },
+  });
+
+  await sink.sendText('hello');
+  await sink.breakMessage();
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, 'hello');
+
+  await sink.sendText('again');
+  await sink.flush();
+
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].text, 'again');
+  assert.equal(edits.length, 0);
+});

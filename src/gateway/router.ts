@@ -70,7 +70,7 @@ const CLI_PRESETS: Record<CliPresetId, CliPreset> = {
     id: 'claude',
     label: 'Claude Code',
     agentCommand: 'npx',
-    agentArgs: ['-y', '@anthropic-ai/claude-code-acp@latest'],
+    agentArgs: ['-y', '@zed-industries/claude-code-acp@latest'],
   },
 };
 
@@ -854,6 +854,13 @@ export class GatewayRouter {
       finishRun(this.db, { runId, stopReason: result.stopReason });
     } catch (error: any) {
       finishRun(this.db, { runId, error: String(error?.message ?? error) });
+
+      if (isAcpTransportError(error)) {
+        const stale = this.runtimesBySessionKey.get(sessionKey);
+        stale?.runtime.close();
+        this.runtimesBySessionKey.delete(sessionKey);
+      }
+
       await sink.sendText(`Error: ${String(error?.message ?? error)}`);
     } finally {
       try {
@@ -1059,4 +1066,19 @@ function formatPromptTextForStorage(text: string, resources: UserResource[]): st
 
   if (!trimmed) return attachmentSummary;
   return `${text}\n${attachmentSummary}`;
+}
+
+function isAcpTransportError(error: unknown): boolean {
+  const name = String((error as { name?: unknown } | null)?.name ?? '').trim();
+  if (name === 'AcpTransportError') return true;
+
+  const message = String(
+    (error as { message?: unknown } | null)?.message ?? error ?? '',
+  ).toLowerCase();
+
+  return (
+    message.includes('acp process is not running') ||
+    message.includes('acp agent exited') ||
+    message.includes('acp request timed out')
+  );
 }

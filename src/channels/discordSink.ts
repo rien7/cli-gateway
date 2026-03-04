@@ -32,6 +32,7 @@ export function createDiscordSink(
 
   return {
     sendText: buffered.sendText,
+    breakTextStream: buffered.breakMessage,
     flush: buffered.flush,
     getDeliveryState: buffered.getState,
     requestPermission: async (req) => {
@@ -64,11 +65,13 @@ export function createDiscordSink(
         );
       }
 
-      await sendChannel.send({
-        content: `<@${userId}>`,
+      const msg = await sendChannel.send({
+        content: `<@${userId}> Please approve this tool call.`,
         embeds: [embed],
         components: [row],
       });
+
+      await addDiscordPermissionReactions(msg);
     },
     sendUi: async (event) => {
       const embed = new EmbedBuilder()
@@ -102,6 +105,28 @@ export function createDiscordSink(
       await sendChannel.send({ embeds: [embed] });
     },
   };
+}
+
+async function addDiscordPermissionReactions(message: unknown): Promise<void> {
+  if (
+    !message ||
+    typeof message !== 'object' ||
+    typeof (message as { react?: unknown }).react !== 'function'
+  ) {
+    return;
+  }
+
+  const react = (message as { react: (emoji: string) => Promise<unknown> }).react;
+  try {
+    await react('👍');
+  } catch {
+    // best effort
+  }
+  try {
+    await react('👎');
+  } catch {
+    // best effort
+  }
 }
 
 function truncate(text: string, maxLen: number): string {

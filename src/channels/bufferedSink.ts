@@ -5,6 +5,7 @@ export type BufferedSinkState = {
 
 export type BufferedSink = {
   sendText: (delta: string) => Promise<void>;
+  breakMessage: () => Promise<void>;
   flush: () => Promise<void>;
   getState: () => BufferedSinkState;
 };
@@ -72,6 +73,15 @@ export function createBufferedSink(params: {
 
   return {
     sendText,
+    breakMessage: async () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      await doFlush();
+      currentText = '';
+      currentMessageId = null;
+    },
     flush: async () => {
       if (flushTimer) {
         clearTimeout(flushTimer);

@@ -41,6 +41,7 @@ export function createTelegramSink(
     return {
       sendAgentText: buffered.sendText,
       sendText: buffered.sendText,
+      breakTextStream: buffered.breakMessage,
       flush: buffered.flush,
       getDeliveryState: buffered.getState,
       requestPermission: async (req) => {
@@ -117,6 +118,7 @@ export function createTelegramSink(
   });
   return {
     sendAgentText: agentBuffered.sendText,
+    breakTextStream: agentBuffered.breakMessage,
     sendText: async (delta: string) => {
       if (!delta.trim()) return;
       await bot.api.sendMessage(chatId, truncate(delta, 4096), {
