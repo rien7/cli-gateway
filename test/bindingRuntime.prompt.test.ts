@@ -175,6 +175,105 @@ class FakeRpc implements StdioProcess {
   }
 }
 
+class DirectToolRpc implements StdioProcess {
+  private messageHandlers: Array<(m: JsonRpcMessage) => void> = [];
+  private sessionId = 'sess-direct-tool';
+  private promptRequestId: number | null = null;
+  private workspaceFile: string;
+
+  constructor(params: { workspaceFile: string }) {
+    this.workspaceFile = params.workspaceFile;
+  }
+
+  write(message: JsonRpcMessage): void {
+    if (!('method' in message)) {
+      if ('id' in message && 'result' in message) {
+        const res = message as JsonRpcResponse;
+        if (res.id === 700) {
+          queueMicrotask(() => {
+            this.emit({
+              jsonrpc: '2.0',
+              method: 'session/update',
+              params: {
+                sessionId: this.sessionId,
+                update: {
+                  sessionUpdate: 'agent_message_chunk',
+                  content: { type: 'text', text: 'done' },
+                },
+              },
+            } as any);
+
+            this.emit({
+              jsonrpc: '2.0',
+              id: this.promptRequestId!,
+              result: { stopReason: 'end' },
+            } as JsonRpcResponse);
+          });
+        }
+      }
+      return;
+    }
+
+    const req = message as JsonRpcRequest;
+
+    if (req.method === 'initialize') {
+      queueMicrotask(() => {
+        this.emit({
+          jsonrpc: '2.0',
+          id: req.id,
+          result: {
+            protocolVersion: 1,
+            agentCapabilities: { loadSession: false },
+          },
+        } as JsonRpcResponse);
+      });
+      return;
+    }
+
+    if (req.method === 'session/new') {
+      queueMicrotask(() => {
+        this.emit({
+          jsonrpc: '2.0',
+          id: req.id,
+          result: { sessionId: this.sessionId },
+        } as JsonRpcResponse);
+      });
+      return;
+    }
+
+    if (req.method === 'session/prompt') {
+      this.promptRequestId = Number(req.id);
+      queueMicrotask(() => {
+        this.emit({
+          jsonrpc: '2.0',
+          id: 700,
+          method: 'fs/read_text_file',
+          params: {
+            sessionId: this.sessionId,
+            path: this.workspaceFile,
+          },
+        } as any);
+      });
+    }
+  }
+
+  onMessage(cb: (message: JsonRpcMessage) => void): void {
+    this.messageHandlers.push(cb);
+  }
+
+  onStderr(): void {
+    // noop
+  }
+
+  kill(): void {
+    // noop
+  }
+
+  private emit(message: JsonRpcMessage): void {
+    this.messageHandlers.forEach((h) => h(message));
+  }
+}
+
 class SummaryFilterRpc implements StdioProcess {
   private messageHandlers: Array<(m: JsonRpcMessage) => void> = [];
   private promptRequestId: number | null = null;
@@ -625,6 +724,102 @@ test('BindingRuntime prompt emits plan/tool UI and supports interactive permissi
 
   // ensure allow decision granted exactly once
   assert.equal(toolAuth.consume(sessionKey, 'read'), false);
+
+  rt.close();
+  db.close();
+});
+
+test('BindingRuntime prompts interactively when tool is called without session/request_permission', async () => {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  migrate(db);
+
+  const workspaceRoot = fs.mkdtempSync('/tmp/cli-gateway-test-');
+  const filePath = path.join(workspaceRoot, 'hello.txt');
+  fs.writeFileSync(filePath, 'hello', 'utf8');
+
+  const key: ConversationKey = {
+    platform: 'discord',
+    chatId: 'c',
+    threadId: null,
+    userId: 'u',
+  };
+
+  const sessionKey = 's-direct';
+  createSession(db, {
+    sessionKey,
+    agentCommand: 'agent',
+    agentArgs: [],
+    cwd: workspaceRoot,
+    loadSupported: false,
+  });
+
+  const bindingKey = upsertBinding(db, key, sessionKey).bindingKey;
+  const toolAuth = new ToolAuth(db);
+
+  const rt = new BindingRuntime({
+    db,
+    config: {
+      discordToken: undefined,
+      discordAllowChannelId: undefined,
+      telegramToken: undefined,
+      feishuAppId: undefined,
+      feishuAppSecret: undefined,
+      feishuVerificationToken: undefined,
+      feishuListenPort: 3030,
+      acpAgentCommand: 'node',
+      acpAgentArgs: [],
+      workspaceRoot,
+      dbPath: ':memory:',
+      schedulerEnabled: false,
+      runtimeIdleTtlSeconds: 999,
+      maxBindingRuntimes: 5,
+      uiDefaultMode: 'verbose',
+      uiJsonMaxChars: 10_000,
+      contextReplayEnabled: false,
+      contextReplayRuns: 0,
+      contextReplayMaxChars: 0,
+    } as any,
+    toolAuth,
+    sessionKey,
+    bindingKey,
+    acpRpc: new DirectToolRpc({ workspaceFile: filePath }),
+    workspaceRoot,
+  });
+
+  createRun(db, { runId: 'r-direct', sessionKey, promptText: 'go' });
+
+  const permissionRequests: any[] = [];
+  const chunks: string[] = [];
+
+  const sink: OutboundSink = {
+    sendText: async (t) => {
+      chunks.push(t);
+    },
+    requestPermission: async (req) => {
+      permissionRequests.push(req);
+      const decision = await rt.decidePermission({
+        decision: 'allow',
+        requestId: req.requestId,
+        actorUserId: 'u',
+      });
+      assert.equal(decision.ok, true);
+    },
+  };
+
+  const out = await rt.prompt({
+    runId: 'r-direct',
+    promptText: 'go',
+    sink,
+    uiMode: 'verbose',
+    actorUserId: 'u',
+  });
+
+  assert.equal(out.stopReason, 'end');
+  assert.equal(permissionRequests.length, 1);
+  assert.equal(permissionRequests[0].toolKind, 'read');
+  assert.ok(String(permissionRequests[0].toolTitle).includes(filePath));
+  assert.ok(chunks.join('').includes('done'));
 
   rt.close();
   db.close();

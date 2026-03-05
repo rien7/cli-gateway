@@ -195,9 +195,13 @@ export async function startDiscord(
       };
 
       const channel = message.channel as TextBasedChannel;
+      const globalContextText = extractDiscordChannelDescription(channel) ?? undefined;
       const sink = createDiscordSink(channel, message.author.id);
 
-      await router.handleUserMessage(key, text, sink, { resources });
+      await router.handleUserMessage(key, text, sink, {
+        resources,
+        globalContextText,
+      });
       await finalizeDiscordInboundReaction(message, '🕊');
     } catch (error) {
       log.error('Discord message handler error', error);
@@ -243,6 +247,33 @@ function extractDiscordImageResources(
   }
 
   return out;
+}
+
+export function extractDiscordChannelDescription(channel: unknown): string | null {
+  if (!channel || typeof channel !== 'object') return null;
+
+  const topic = normalizeDiscordChannelText(
+    (channel as { topic?: unknown }).topic,
+  );
+  if (topic) return topic;
+
+  const description = normalizeDiscordChannelText(
+    (channel as { description?: unknown }).description,
+  );
+  if (description) return description;
+
+  const parent = (channel as {
+    parent?: { topic?: unknown; description?: unknown } | null;
+  }).parent;
+  const parentTopic = normalizeDiscordChannelText(parent?.topic);
+  if (parentTopic) return parentTopic;
+
+  return normalizeDiscordChannelText(parent?.description);
+}
+
+function normalizeDiscordChannelText(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  return text ? text : null;
 }
 
 async function syncDiscordSlashCommands(

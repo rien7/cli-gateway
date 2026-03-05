@@ -48,6 +48,7 @@ export type UserResource = {
 
 export type UserMessageOptions = {
   resources?: UserResource[];
+  globalContextText?: string;
 };
 
 type CliPresetId = 'codex' | 'claude';
@@ -825,17 +826,30 @@ export class GatewayRouter {
     });
 
     let contextText = '';
-    if (
-      this.config.contextReplayEnabled &&
-      this.config.contextReplayRuns > 0 &&
-      !rt.hasSessionId()
-    ) {
-      contextText = buildReplayContextFromRecentRuns(this.db, {
-        sessionKey,
-        excludeRunId: runId,
-        maxRuns: this.config.contextReplayRuns,
-        maxChars: this.config.contextReplayMaxChars,
-      });
+    const isFreshSession = !rt.hasSessionId();
+    if (isFreshSession) {
+      const contextParts: string[] = [];
+
+      const globalContextText = formatGlobalContextText(
+        options?.globalContextText,
+      );
+      if (globalContextText) {
+        contextParts.push(globalContextText);
+      }
+
+      if (this.config.contextReplayEnabled && this.config.contextReplayRuns > 0) {
+        const replayContextText = buildReplayContextFromRecentRuns(this.db, {
+          sessionKey,
+          excludeRunId: runId,
+          maxRuns: this.config.contextReplayRuns,
+          maxChars: this.config.contextReplayMaxChars,
+        });
+        if (replayContextText) {
+          contextParts.push(replayContextText);
+        }
+      }
+
+      contextText = contextParts.join('\n\n');
     }
 
     try {
@@ -1053,6 +1067,12 @@ function sanitizeResources(resources: UserMessageOptions['resources']): UserReso
   }
 
   return out;
+}
+
+function formatGlobalContextText(input: string | undefined): string {
+  const text = String(input ?? '').trim();
+  if (!text) return '';
+  return `Global context (channel description):\n${text}`;
 }
 
 function formatPromptTextForStorage(text: string, resources: UserResource[]): string {

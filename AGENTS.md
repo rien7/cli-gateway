@@ -55,6 +55,7 @@ ACP sessions are process-local; after restart/GC the agent will start with no st
 
 Current mitigation:
 - Context replay on fresh ACP sessions via `CONTEXT_REPLAY_*` (DB-backed replay of recent runs).
+- Discord fresh sessions also prepend channel topic/description as global context when available.
 
 If you change how context is built or injected, update:
 - `src/gateway/history.ts`

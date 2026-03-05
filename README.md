@@ -153,11 +153,13 @@ Discord note:
 - Slash commands are synced at startup (global + per-guild best-effort). Global command propagation may take time on Discord side.
 - ACP `cli-inline` dynamic commands are not yet exposed as Discord slash commands.
 - Inbound message processing uses reaction acks (`🤔` while running, then `🕊` on success or `😢` on error), aligned with Telegram behavior.
+- On fresh ACP sessions, the channel topic/description is injected as a global context block before the user prompt.
 
 ## Security model (default)
 
 - File system and terminal tool calls are restricted to the active workspace root (per conversation; see `/workspace`).
 - Tool execution is **deny-by-default**; the user must approve via ACP permission flow.
+- If an agent calls a tool directly without first sending `session/request_permission`, the gateway synthesizes an interactive permission prompt and blocks the tool call until approved/denied.
 - Approvals are interactive on Discord/Telegram (buttons). Discord permission cards also add reaction shortcuts (`👍` allow, `👎` deny; `✅`/`❌` still accepted); `/allow`/`/deny` remain as fallback.
 - You can persist policy choices (e.g. `allow_always` / `reject_always`) per conversation.
 
@@ -189,6 +191,7 @@ To reduce this, `cli-gateway` can replay recent conversation runs from the DB in
 
 - Config keys: `contextReplayEnabled`, `contextReplayRuns`, `contextReplayMaxChars`
 - Default: enabled, last 8 runs, max 12k chars (used only on fresh ACP sessions)
+- Discord-only: fresh sessions also include channel topic/description as global context.
 
 ## Status
 

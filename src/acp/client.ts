@@ -100,6 +100,13 @@ export class AcpClient {
   // run-scoped state
   private currentRun: AcpRun | null = null;
   private readonly runSeq = new Map<string, number>();
+  private readonly pendingLocalPermissions = new Map<
+    JsonRpcId,
+    {
+      resolve: (decision: PermissionDecision) => void;
+      reject: (error: Error) => void;
+    }
+  >();
 
   private readonly events: AcpClientEvents;
 
@@ -133,11 +140,17 @@ export class AcpClient {
             ')',
         ),
       );
+      this.rejectAllLocalPermissions(
+        this.makeTransportError(
+          'ACP agent exited while waiting for permission response',
+        ),
+      );
     });
   }
 
   close(): void {
     this.rejectAllPending(this.makeTransportError('ACP client closed'));
+    this.rejectAllLocalPermissions(this.makeTransportError('ACP client closed'));
     this.rpc.kill();
   }
 
@@ -204,6 +217,13 @@ export class AcpClient {
     req: PermissionRequest,
     decision: PermissionDecision,
   ): Promise<void> {
+    const local = this.pendingLocalPermissions.get(req.requestId);
+    if (local) {
+      this.pendingLocalPermissions.delete(req.requestId);
+      local.resolve(decision);
+      return;
+    }
+
     const outcome: RequestPermissionResult['outcome'] =
       decision.kind === 'cancelled'
         ? { outcome: 'cancelled' }
@@ -288,7 +308,11 @@ export class AcpClient {
           const params = req.params as FsReadTextFileParams;
           emitTool({ phase: 'start', method: req.method, params });
 
-          this.assertAuthorized('read');
+          await this.ensureAuthorized({
+            kind: 'read',
+            method: req.method,
+            params,
+          });
           const resolvedPath = resolveWorkspacePath(
             this.workspaceRoot,
             params.path,
@@ -313,7 +337,11 @@ export class AcpClient {
           const params = req.params as FsWriteTextFileParams;
           emitTool({ phase: 'start', method: req.method, params: { path: params.path } });
 
-          this.assertAuthorized('edit');
+          await this.ensureAuthorized({
+            kind: 'edit',
+            method: req.method,
+            params,
+          });
           const resolvedPath = resolveWorkspacePath(
             this.workspaceRoot,
             params.path,
@@ -343,7 +371,11 @@ export class AcpClient {
             },
           });
 
-          this.assertAuthorized('execute');
+          await this.ensureAuthorized({
+            kind: 'execute',
+            method: req.method,
+            params,
+          });
           const terminalId = await this.terminalCreate(params);
           this.respond(req.id, { terminalId } satisfies TerminalCreateResult);
 
@@ -389,7 +421,11 @@ export class AcpClient {
 
         case 'terminal/kill': {
           const params = req.params as TerminalKillParams;
-          this.assertAuthorized('execute');
+          await this.ensureAuthorized({
+            kind: 'execute',
+            method: req.method,
+            params,
+          });
           this.terminalKill(params);
           this.respond(req.id, {});
           return;
@@ -493,6 +529,16 @@ export class AcpClient {
     }
   }
 
+  private rejectAllLocalPermissions(error: Error): void {
+    for (const [id, pending] of this.pendingLocalPermissions.entries()) {
+      this.pendingLocalPermissions.delete(id);
+      const detail = this.makeTransportError(
+        error.message + '; permission_request_id=' + String(id),
+      );
+      pending.reject(detail);
+    }
+  }
+
   private makeTransportError(message: string): Error {
     const err = new Error(message);
     err.name = 'AcpTransportError';
@@ -521,7 +567,12 @@ export class AcpClient {
     return seq;
   }
 
-  private assertAuthorized(kind: ToolKind): void {
+  private async ensureAuthorized(params: {
+    kind: ToolKind;
+    method: string;
+    params: unknown;
+  }): Promise<void> {
+    const { kind } = params;
     const sessionKey = this.currentRun?.sessionKey;
 
     // Tool calls should only occur within a prompt turn.
@@ -536,10 +587,47 @@ export class AcpClient {
       throw new Error(`Tool call denied (no ToolAuth): ${kind}`);
     }
 
-    const ok = this.toolAuth.consume(sessionKey, kind);
-    if (!ok) {
-      throw new Error(`Tool call denied by policy: ${kind}. Approve in permission UI (Allow) or use /allow <n>.`);
+    if (this.toolAuth.consume(sessionKey, kind)) {
+      return;
     }
+
+    if (!this.events.onPermissionRequest) {
+      throw new Error(
+        `Tool call denied by policy: ${kind}. Approve in permission UI (Allow) or use /allow <n>.`,
+      );
+    }
+
+    const req = buildLocalPermissionRequest({
+      sessionKey,
+      kind,
+      method: params.method,
+      params: params.params,
+    });
+
+    const decision = await new Promise<PermissionDecision>((resolve, reject) => {
+      this.pendingLocalPermissions.set(req.requestId, { resolve, reject });
+
+      try {
+        this.events.onPermissionRequest?.(req);
+      } catch (error: any) {
+        this.pendingLocalPermissions.delete(req.requestId);
+        reject(new Error(String(error?.message ?? error)));
+      }
+    });
+
+    if (decision.kind === 'cancelled') {
+      throw new Error(
+        `Tool call denied by policy: ${kind}. Approve in permission UI (Allow) or use /allow <n>.`,
+      );
+    }
+
+    if (this.toolAuth.consume(sessionKey, kind)) {
+      return;
+    }
+
+    throw new Error(
+      `Tool call denied by policy: ${kind}. Approve in permission UI (Allow) or use /allow <n>.`,
+    );
   }
 
   // terminal management (minimal)
@@ -635,6 +723,91 @@ export class AcpClient {
     state.child.kill('SIGKILL');
     this.terminals.delete(params.terminalId);
   }
+}
+
+function buildLocalPermissionRequest(params: {
+  sessionKey: string;
+  kind: ToolKind;
+  method: string;
+  params: unknown;
+}): PermissionRequest {
+  const sessionId =
+    typeof (params.params as { sessionId?: unknown } | null)?.sessionId ===
+    'string'
+      ? String((params.params as { sessionId?: string }).sessionId)
+      : 'unknown';
+
+  return {
+    requestId: `localperm-${randomUUID()}`,
+    sessionKey: params.sessionKey,
+    sessionId,
+    createdAtMs: Date.now(),
+    params: {
+      sessionId,
+      toolCall: {
+        title: buildLocalToolTitle(params.method, params.params),
+        kind: params.kind,
+      },
+      options: [
+        { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+        {
+          optionId: 'allow_always',
+          name: 'Always allow',
+          kind: 'allow_always',
+        },
+        { optionId: 'reject_once', name: 'Reject once', kind: 'reject_once' },
+        {
+          optionId: 'reject_always',
+          name: 'Always reject',
+          kind: 'reject_always',
+        },
+      ],
+    },
+  };
+}
+
+function buildLocalToolTitle(method: string, rawParams: unknown): string {
+  const params = (rawParams ?? {}) as Record<string, unknown>;
+
+  if (method === 'fs/read_text_file') {
+    const target = stringOrFallback(params.path, '<path>');
+    return truncateInline(`read: ${target}`, 180);
+  }
+
+  if (method === 'fs/write_text_file') {
+    const target = stringOrFallback(params.path, '<path>');
+    return truncateInline(`edit: ${target}`, 180);
+  }
+
+  if (method === 'terminal/create') {
+    const command = stringOrFallback(params.command, '<command>');
+    const args = Array.isArray(params.args)
+      ? params.args
+          .filter((item): item is string => typeof item === 'string')
+          .join(' ')
+      : '';
+    const full = args ? `${command} ${args}` : command;
+    return truncateInline(`run: ${full}`, 180);
+  }
+
+  if (method === 'terminal/kill') {
+    const terminalId = stringOrFallback(params.terminalId, '<terminal_id>');
+    return truncateInline(`run: kill terminal ${terminalId}`, 180);
+  }
+
+  return truncateInline(method, 180);
+}
+
+function truncateInline(text: string, maxLen: number): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (clean.length <= maxLen) return clean;
+  return clean.slice(0, maxLen - 3) + '...';
+}
+
+function stringOrFallback(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  return trimmed || fallback;
 }
 
 function readTextFileWithLimit(

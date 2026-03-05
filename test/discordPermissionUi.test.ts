@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  extractDiscordChannelDescription,
   extractPermissionRouteFromComponents,
   parsePermissionCustomId,
   permissionDecisionFromEmoji,
@@ -59,6 +60,34 @@ test('extractPermissionRouteFromComponents returns null when absent', () => {
   assert.equal(extractPermissionRouteFromComponents([]), null);
   assert.equal(
     extractPermissionRouteFromComponents([{ components: [{ customId: 'noop' }] }]),
+    null,
+  );
+});
+
+test('extractDiscordChannelDescription prefers channel topic then parent fallback', () => {
+  assert.equal(
+    extractDiscordChannelDescription({
+      topic: '  team playbook  ',
+      description: 'ignored',
+      parent: { topic: 'parent topic' },
+    }),
+    'team playbook',
+  );
+
+  assert.equal(
+    extractDiscordChannelDescription({
+      topic: '  ',
+      parent: { topic: '  parent rules  ' },
+    }),
+    'parent rules',
+  );
+
+  assert.equal(
+    extractDiscordChannelDescription({
+      topic: '',
+      description: '',
+      parent: { topic: ' ', description: '' },
+    }),
     null,
   );
 });

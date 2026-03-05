@@ -101,7 +101,7 @@ class FakeRpc implements StdioProcess {
   }
 }
 
-test('router non-command flow creates run/events/checkpoint and uses context replay', async () => {
+test('router non-command flow creates run/events/checkpoint and uses global+replay context', async () => {
   const db = new Database(':memory:');
   db.pragma('foreign_keys = ON');
   migrate(db);
@@ -188,7 +188,9 @@ test('router non-command flow creates run/events/checkpoint and uses context rep
     getDeliveryState: () => state,
   };
 
-  await router.handleUserMessage(key, 'hello', sink as any);
+  await router.handleUserMessage(key, 'hello', sink as any, {
+    globalContextText: 'Channel rule: always provide concrete patch steps.',
+  });
 
   assert.ok(state.text.includes('ok'));
 
@@ -207,7 +209,91 @@ test('router non-command flow creates run/events/checkpoint and uses context rep
   ) as any;
   assert.ok(promptReq);
   const blocks = promptReq.params.prompt as Array<{ type: string; text: string }>;
+  assert.ok(blocks[0].text.includes('Global context (channel description):'));
+  assert.ok(blocks[0].text.includes('Channel rule: always provide concrete patch steps.'));
   assert.ok(blocks[0].text.includes('Context (previous messages'));
+
+  router.close();
+  db.close();
+});
+
+test('router injects global context only on fresh sessions', async () => {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  migrate(db);
+
+  const workspaceRoot = fs.mkdtempSync('/tmp/cli-gateway-router-');
+
+  const key: ConversationKey = {
+    platform: 'discord',
+    chatId: 'fresh-check',
+    threadId: null,
+    userId: 'u',
+  };
+
+  const sessionKey = 's-fresh-check';
+  createSession(db, {
+    sessionKey,
+    agentCommand: 'agent',
+    agentArgs: [],
+    cwd: workspaceRoot,
+    loadSupported: false,
+  });
+  upsertBinding(db, key, sessionKey);
+
+  const hasSessionAnswers = [false, true];
+  const seenContexts: string[] = [];
+
+  const router = new GatewayRouter({
+    db,
+    config: {
+      discordToken: undefined,
+      discordAllowChannelId: undefined,
+      telegramToken: undefined,
+      feishuAppId: undefined,
+      feishuAppSecret: undefined,
+      feishuVerificationToken: undefined,
+      feishuListenPort: 3030,
+      acpAgentCommand: 'node',
+      acpAgentArgs: [],
+      workspaceRoot,
+      dbPath: ':memory:',
+      schedulerEnabled: false,
+      runtimeIdleTtlSeconds: 999,
+      maxBindingRuntimes: 5,
+      uiDefaultMode: 'verbose',
+      uiJsonMaxChars: 10_000,
+      contextReplayEnabled: false,
+      contextReplayRuns: 0,
+      contextReplayMaxChars: 0,
+    } as any,
+    runtimeFactory: () =>
+      ({
+        hasSessionId: () => hasSessionAnswers.shift() ?? true,
+        prompt: async (params: { contextText?: string }) => {
+          seenContexts.push(params.contextText ?? '');
+          return { stopReason: 'end', lastSeq: 0 };
+        },
+        close: () => {},
+      }) as any,
+  });
+
+  const sink = {
+    sendText: async () => {},
+    flush: async () => {},
+  };
+
+  await router.handleUserMessage(key, 'first', sink as any, {
+    globalContextText: 'Project charter: keep responses concise.',
+  });
+  await router.handleUserMessage(key, 'second', sink as any, {
+    globalContextText: 'Project charter: keep responses concise.',
+  });
+
+  assert.equal(seenContexts.length, 2);
+  assert.ok(seenContexts[0].includes('Global context (channel description):'));
+  assert.ok(seenContexts[0].includes('Project charter: keep responses concise.'));
+  assert.equal(seenContexts[1], '');
 
   router.close();
   db.close();
