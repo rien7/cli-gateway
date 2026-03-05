@@ -53,7 +53,7 @@ test('buffered sink background flush runs on timer', async () => {
   assert.equal(sent.length, 1);
 });
 
-test('buffered sink rotates message when buffer too large', async () => {
+test('buffered sink rotates messages without losing trailing text', async () => {
   const sent: string[] = [];
 
   const sink = createBufferedSink({
@@ -66,11 +66,11 @@ test('buffered sink rotates message when buffer too large', async () => {
     edit: async () => {},
   });
 
-  await sink.sendText('0123456789');
-  await sink.sendText('0123456789');
+  // Regression: previously this could be truncated to a single "0123456789".
+  await sink.sendText('0123456789ABCDE');
   await sink.flush();
 
-  assert.ok(sent.length >= 1);
+  assert.deepEqual(sent, ['0123456789', 'ABCDE']);
 });
 
 test('buffered sink falls back to send if edit fails', async () => {

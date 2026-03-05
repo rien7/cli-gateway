@@ -20,32 +20,44 @@ export function createBufferedSink(params: {
   let currentText = params.initialState?.text ?? '';
   let currentMessageId: string | null = params.initialState?.messageId ?? null;
   let flushTimer: NodeJS.Timeout | null = null;
-  let flushing = false;
+  let flushInFlight: Promise<void> | null = null;
 
-  async function doFlush(): Promise<void> {
-    if (flushing) return;
-    flushing = true;
+  async function runFlush(): Promise<void> {
+    if (!currentText) return;
+
+    if (!currentMessageId) {
+      const res = await params.send(currentText);
+      currentMessageId = res.id;
+      return;
+    }
+
     try {
-      if (!currentText) return;
-
-      if (!currentMessageId) {
-        const res = await params.send(truncate(currentText, params.maxLen));
-        currentMessageId = res.id;
+      await params.edit(currentMessageId, currentText);
+    } catch (error) {
+      if (isNoopEditError(error)) {
         return;
       }
-
-      try {
-        await params.edit(currentMessageId, truncate(currentText, params.maxLen));
-      } catch (error) {
-        if (isNoopEditError(error)) {
-          return;
-        }
-        const res = await params.send(truncate(currentText, params.maxLen));
-        currentMessageId = res.id;
-      }
-    } finally {
-      flushing = false;
+      const res = await params.send(currentText);
+      currentMessageId = res.id;
     }
+  }
+
+  async function doFlush(): Promise<void> {
+    if (flushInFlight) {
+      await flushInFlight;
+      return;
+    }
+
+    flushInFlight = runFlush().finally(() => {
+      flushInFlight = null;
+    });
+    await flushInFlight;
+  }
+
+  function clearScheduledFlush(): void {
+    if (!flushTimer) return;
+    clearTimeout(flushTimer);
+    flushTimer = null;
   }
 
   function scheduleFlush(): void {
@@ -61,41 +73,49 @@ export function createBufferedSink(params: {
   async function sendText(delta: string): Promise<void> {
     if (!delta) return;
 
-    if (currentText.length + delta.length > params.maxLen * 1.5) {
-      await doFlush();
-      currentText = '';
-      currentMessageId = null;
+    let remain = delta;
+
+    while (remain.length > 0) {
+      const capacity = params.maxLen - currentText.length;
+      if (capacity <= 0) {
+        clearScheduledFlush();
+        await doFlush();
+        currentText = '';
+        currentMessageId = null;
+        continue;
+      }
+
+      const next = remain.slice(0, capacity);
+      currentText += next;
+      remain = remain.slice(next.length);
+
+      if (currentText.length >= params.maxLen) {
+        clearScheduledFlush();
+        await doFlush();
+        currentText = '';
+        currentMessageId = null;
+      }
     }
 
-    currentText += delta;
-    scheduleFlush();
+    if (currentText) {
+      scheduleFlush();
+    }
   }
 
   return {
     sendText,
     breakMessage: async () => {
-      if (flushTimer) {
-        clearTimeout(flushTimer);
-        flushTimer = null;
-      }
+      clearScheduledFlush();
       await doFlush();
       currentText = '';
       currentMessageId = null;
     },
     flush: async () => {
-      if (flushTimer) {
-        clearTimeout(flushTimer);
-        flushTimer = null;
-      }
+      clearScheduledFlush();
       await doFlush();
     },
     getState: () => ({ text: currentText, messageId: currentMessageId }),
   };
-}
-
-function truncate(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen - 3) + '...';
 }
 
 function isNoopEditError(error: unknown): boolean {
