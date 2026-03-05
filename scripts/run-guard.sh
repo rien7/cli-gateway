@@ -181,7 +181,9 @@ resolve_command() {
   fi
 
   if [[ -f "${CMD_FILE}" ]]; then
-    mapfile -t loaded < "${CMD_FILE}"
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      loaded+=("${line}")
+    done < "${CMD_FILE}"
     if [[ ${#loaded[@]} -gt 0 ]]; then
       RESOLVED_CMD=("${loaded[@]}")
       return
@@ -225,7 +227,11 @@ start_guard() {
 
   cleanup_gateway_lock
 
-  resolve_command "${cmd[@]}"
+  if [[ ${#cmd[@]} -gt 0 ]]; then
+    resolve_command "${cmd[@]}"
+  else
+    resolve_command
+  fi
   cmd=("${RESOLVED_CMD[@]}")
   save_command "${cmd[@]}"
 
@@ -293,7 +299,11 @@ restart_guard() {
   local -a cmd=("$@")
 
   stop_guard
-  start_guard "${cmd[@]}"
+  if [[ ${#cmd[@]} -gt 0 ]]; then
+    start_guard "${cmd[@]}"
+  else
+    start_guard
+  fi
 }
 
 status_guard() {
@@ -344,7 +354,11 @@ run_loop() {
   local child_pid=""
 
   ensure_state_dir
-  resolve_command "${cmd[@]}"
+  if [[ ${#cmd[@]} -gt 0 ]]; then
+    resolve_command "${cmd[@]}"
+  else
+    resolve_command
+  fi
   cmd=("${RESOLVED_CMD[@]}")
 
   echo "$$" > "${PID_FILE}"
@@ -470,25 +484,41 @@ main() {
 
   case "${action}" in
     start)
-      start_guard "${args[@]}"
+      if [[ ${#args[@]} -gt 0 ]]; then
+        start_guard "${args[@]}"
+      else
+        start_guard
+      fi
       ;;
     stop)
       stop_guard
       ;;
     restart)
-      restart_guard "${args[@]}"
+      if [[ ${#args[@]} -gt 0 ]]; then
+        restart_guard "${args[@]}"
+      else
+        restart_guard
+      fi
       ;;
     status)
       status_guard
       ;;
     logs)
-      logs_guard "${args[@]}"
+      if [[ ${#args[@]} -gt 0 ]]; then
+        logs_guard "${args[@]}"
+      else
+        logs_guard
+      fi
       ;;
     help)
       usage
       ;;
     _run-loop)
-      run_loop "${args[@]}"
+      if [[ ${#args[@]} -gt 0 ]]; then
+        run_loop "${args[@]}"
+      else
+        run_loop
+      fi
       ;;
     *)
       usage
