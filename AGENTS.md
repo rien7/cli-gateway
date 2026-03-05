@@ -26,6 +26,7 @@ This file is for coding agents (Codex/Claude/etc) working in this repository.
 - UI modes: `verbose` (default) and `summary`.
 - Per-conversation override: `/ui verbose|summary` (stored in DB `ui_prefs`).
 - Per-conversation runtime prefs include `/workspace` and `/cli` (persist across `/new`).
+- Permission allowlist can be managed per conversation via `/whitelist` (`tool_kind` + optional prefix scoped, persisted via `tool_policies` and `tool_allow_prefixes`).
 
 ## Local dev
 

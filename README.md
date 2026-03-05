@@ -152,6 +152,7 @@ Feishu currently runs in webhook event-subscription mode:
 - `/new` start a fresh ACP session for this conversation
 - `/allow <n>` select a pending permission option by index (fallback)
 - `/deny` reject a pending permission request (fallback)
+- `/whitelist list|add|del|clear` manage per-conversation permission whitelist by `tool_kind` (optional prefix scope)
 - `/cron help|list|add|del|enable|disable` manage scheduled prompts
 - `/last` show last run output for this session
 - `/replay [runId]` replay stored `session/update` output for a run (best-effort)
@@ -166,7 +167,7 @@ Telegram note:
 - Chat-scoped command menu is synced best-effort from `cli-inline` commands. Commands with `-` are mapped to `_` in Telegram UI.
 
 Discord note:
-- Built-in commands are available as slash commands (`/help`, `/ui`, `/cli`, `/workspace`, `/new`, `/last`, `/replay`, `/allow`, `/deny`, `/cron`).
+- Built-in commands are available as slash commands (`/help`, `/ui`, `/cli`, `/workspace`, `/new`, `/last`, `/replay`, `/allow`, `/deny`, `/whitelist`, `/cron`).
 - Slash commands are synced at startup (global + per-guild best-effort). Global command propagation may take time on Discord side.
 - ACP `cli-inline` dynamic commands are not yet exposed as Discord slash commands.
 - Inbound message processing uses reaction acks (`🤔` while running, then `🕊` on success or `😢` on error), aligned with Telegram behavior.
@@ -176,6 +177,8 @@ Discord note:
 
 - File system and terminal tool calls are restricted to the active workspace root (per conversation; see `/workspace`).
 - Tool execution is **deny-by-default**; the user must approve via ACP permission flow.
+- You can pre-allow specific `tool_kind` values per conversation via `/whitelist add <tool_kind>` (`read|edit|delete|move|search|execute|think|fetch|switch_mode|other`).
+- You can also scope allow rules by prefix: `/whitelist add read /abs/path/prefix` (path kinds) or `/whitelist add execute npm run` (argument prefix). Non-matching calls still require approval.
 - If an agent calls a tool directly without first sending `session/request_permission`, the gateway synthesizes an interactive permission prompt and blocks the tool call until approved/denied.
 - Approvals are interactive on Discord/Telegram (buttons). Discord permission cards also add reaction shortcuts (`👍` allow, `👎` deny; `✅`/`❌` still accepted); `/allow`/`/deny` remain as fallback.
 - You can persist policy choices (e.g. `allow_always` / `reject_always`) per conversation.

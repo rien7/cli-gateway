@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 4;
+const LATEST_VERSION = 5;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -139,6 +139,27 @@ export function migrate(db: Db): void {
       );
 
       UPDATE schema_version SET version = 4;
+      `,
+    );
+  }
+
+  if (current < 5) {
+    db.exec(
+      `
+      CREATE TABLE IF NOT EXISTS tool_allow_prefixes (
+        binding_key TEXT NOT NULL,
+        tool_kind TEXT NOT NULL,
+        arg_prefix TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY(binding_key, tool_kind, arg_prefix),
+        FOREIGN KEY(binding_key) REFERENCES bindings(binding_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_tool_allow_prefixes_binding_kind
+      ON tool_allow_prefixes(binding_key, tool_kind);
+
+      UPDATE schema_version SET version = 5;
       `,
     );
   }

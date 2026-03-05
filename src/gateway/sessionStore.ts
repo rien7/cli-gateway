@@ -83,6 +83,7 @@ export function deleteBinding(db: Db, key: ConversationKey): void {
   // Bindings are referenced by several tables; delete dependents first.
   db.prepare('DELETE FROM jobs WHERE binding_key = ?').run(bindingKey);
   db.prepare('DELETE FROM tool_policies WHERE binding_key = ?').run(bindingKey);
+  db.prepare('DELETE FROM tool_allow_prefixes WHERE binding_key = ?').run(bindingKey);
   db.prepare('DELETE FROM ui_prefs WHERE binding_key = ?').run(bindingKey);
   db.prepare('DELETE FROM delivery_checkpoints WHERE binding_key = ?').run(bindingKey);
 

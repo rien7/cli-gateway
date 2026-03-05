@@ -60,6 +60,7 @@ test('/help prints command list without requiring binding', async () => {
   assert.ok(text.includes('/ui'));
   assert.ok(text.includes('/cli'));
   assert.ok(text.includes('/workspace'));
+  assert.ok(text.includes('/whitelist'));
 
   router.close();
   db.close();

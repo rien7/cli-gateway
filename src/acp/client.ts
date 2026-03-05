@@ -587,7 +587,13 @@ export class AcpClient {
       throw new Error(`Tool call denied (no ToolAuth): ${kind}`);
     }
 
-    if (this.toolAuth.consume(sessionKey, kind)) {
+    if (
+      this.toolAuth.consume(sessionKey, kind, {
+        method: params.method,
+        params: params.params,
+        workspaceRoot: this.workspaceRoot,
+      })
+    ) {
       return;
     }
 
@@ -621,7 +627,13 @@ export class AcpClient {
       );
     }
 
-    if (this.toolAuth.consume(sessionKey, kind)) {
+    if (
+      this.toolAuth.consume(sessionKey, kind, {
+        method: params.method,
+        params: params.params,
+        workspaceRoot: this.workspaceRoot,
+      })
+    ) {
       return;
     }
 

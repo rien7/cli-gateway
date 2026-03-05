@@ -37,6 +37,7 @@ test('buildDiscordSlashCommands includes base command names', () => {
     'new',
     'replay',
     'ui',
+    'whitelist',
     'workspace',
   ]);
 });
@@ -129,6 +130,38 @@ test('mapDiscordSlashToRouterCommand maps optional args', () => {
       }),
     ),
     '/allow 3',
+  );
+
+  assert.equal(
+    mapDiscordSlashToRouterCommand(
+      makeInteraction({
+        commandName: 'whitelist',
+        subcommand: 'add',
+        strings: { tool_kind: 'read', prefix: '/tmp/work' },
+      }),
+    ),
+    '/whitelist add read /tmp/work',
+  );
+
+  assert.equal(
+    mapDiscordSlashToRouterCommand(
+      makeInteraction({
+        commandName: 'whitelist',
+        subcommand: 'list',
+      }),
+    ),
+    '/whitelist list',
+  );
+
+  assert.equal(
+    mapDiscordSlashToRouterCommand(
+      makeInteraction({
+        commandName: 'whitelist',
+        subcommand: 'del',
+        strings: { tool_kind: 'read', prefix: '/tmp/work' },
+      }),
+    ),
+    '/whitelist del read /tmp/work',
   );
 });
 

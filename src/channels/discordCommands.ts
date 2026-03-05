@@ -2,6 +2,7 @@ import {
   SlashCommandBuilder,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from 'discord.js';
+import { TOOL_KINDS } from '../gateway/toolAuth.js';
 
 export type DiscordSlashInteractionLike = {
   commandName: string;
@@ -86,6 +87,56 @@ export function buildDiscordSlashCommands(): RESTPostAPIChatInputApplicationComm
           .setDescription('1-based permission option index')
           .setRequired(true)
           .setMinValue(1),
+      ),
+
+    new SlashCommandBuilder()
+      .setName('whitelist')
+      .setDescription('Manage permission whitelist for this conversation')
+      .addSubcommand((sub) =>
+        sub.setName('list').setDescription('List whitelisted tool kinds'),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName('add')
+          .setDescription('Add a whitelisted tool kind')
+          .addStringOption((opt) =>
+            TOOL_KINDS.reduce(
+              (builder, kind) => builder.addChoices({ name: kind, value: kind }),
+              opt
+                .setName('tool_kind')
+                .setDescription('Tool kind to whitelist')
+                .setRequired(true),
+            ),
+          )
+          .addStringOption((opt) =>
+            opt
+              .setName('prefix')
+              .setDescription('Optional path/argument prefix')
+              .setRequired(false),
+          ),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName('del')
+          .setDescription('Remove a tool kind from whitelist')
+          .addStringOption((opt) =>
+            TOOL_KINDS.reduce(
+              (builder, kind) => builder.addChoices({ name: kind, value: kind }),
+              opt
+                .setName('tool_kind')
+                .setDescription('Tool kind to remove')
+                .setRequired(true),
+            ),
+          )
+          .addStringOption((opt) =>
+            opt
+              .setName('prefix')
+              .setDescription('Optional path/argument prefix')
+              .setRequired(false),
+          ),
+      )
+      .addSubcommand((sub) =>
+        sub.setName('clear').setDescription('Clear whitelist entries'),
       ),
 
     new SlashCommandBuilder()
@@ -184,6 +235,19 @@ export function mapDiscordSlashToRouterCommand(
     case 'allow': {
       const idx = interaction.options.getInteger('index', true);
       return idx ? `/allow ${idx}` : '/allow';
+    }
+    case 'whitelist': {
+      const sub = interaction.options.getSubcommand(true) ?? 'list';
+      if (sub === 'add' || sub === 'del') {
+        const toolKind = interaction.options.getString('tool_kind', true);
+        const prefix = interaction.options.getString('prefix');
+        if (!toolKind) return '/whitelist list';
+        const trimmedPrefix = prefix?.trim();
+        return trimmedPrefix
+          ? `/whitelist ${sub} ${toolKind} ${trimmedPrefix}`
+          : `/whitelist ${sub} ${toolKind}`;
+      }
+      return `/whitelist ${sub}`;
     }
     case 'cron': {
       const sub = interaction.options.getSubcommand(true) ?? 'help';

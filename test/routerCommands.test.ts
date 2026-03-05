@@ -182,6 +182,78 @@ test('/allow and /deny show missing binding when no binding exists', async () =>
   router.close();
 });
 
+test('/whitelist list/add/del/clear manages allow policies per binding', async () => {
+  const db = createDb();
+  const router = new GatewayRouter({ db, config: createConfig() as any });
+
+  const key: ConversationKey = {
+    platform: 'discord',
+    chatId: 'c',
+    threadId: null,
+    userId: 'u',
+  };
+
+  const { sink, texts } = createSink();
+
+  await router.handleUserMessage(key, '/whitelist list', sink as any);
+  assert.equal(texts.at(-1), 'Whitelist: (empty)');
+
+  await router.handleUserMessage(key, '/whitelist add read', sink as any);
+  assert.equal(texts.at(-1), 'OK: whitelisted read (all)');
+
+  await router.handleUserMessage(key, '/whitelist list', sink as any);
+  assert.ok(String(texts.at(-1)).includes('- read (all)'));
+
+  await router.handleUserMessage(
+    key,
+    '/whitelist add read /tmp/cli-gateway-test/safe',
+    sink as any,
+  );
+  assert.ok(String(texts.at(-1)).includes('OK: whitelisted read prefix'));
+
+  await router.handleUserMessage(key, '/whitelist add invalid', sink as any);
+  assert.ok(String(texts.at(-1)).includes('Usage:'));
+
+  await router.handleUserMessage(
+    key,
+    '/whitelist del read /tmp/cli-gateway-test/safe',
+    sink as any,
+  );
+  assert.ok(String(texts.at(-1)).includes('OK: removed read prefix'));
+
+  await router.handleUserMessage(key, '/whitelist del read', sink as any);
+  assert.equal(texts.at(-1), 'Whitelist did not include read.');
+
+  await router.handleUserMessage(key, '/whitelist list', sink as any);
+  assert.equal(texts.at(-1), 'Whitelist: (empty)');
+
+  await router.handleUserMessage(key, '/whitelist add execute', sink as any);
+  await router.handleUserMessage(key, '/whitelist clear', sink as any);
+  assert.ok(String(texts.at(-1)).includes('OK: cleared whitelist'));
+
+  const binding = db
+    .prepare(
+      'SELECT binding_key as bindingKey FROM bindings WHERE platform = ? AND chat_id = ? AND user_id = ? LIMIT 1',
+    )
+    .get('discord', 'c', 'u') as { bindingKey: string };
+
+  const row = db
+    .prepare(
+      'SELECT COUNT(*) as n FROM tool_policies WHERE binding_key = ? AND policy = ?',
+    )
+    .get(binding.bindingKey, 'allow') as { n: number };
+  assert.equal(row.n, 0);
+
+  const prefixRow = db
+    .prepare(
+      'SELECT COUNT(*) as n FROM tool_allow_prefixes WHERE binding_key = ?',
+    )
+    .get(binding.bindingKey) as { n: number };
+  assert.equal(prefixRow.n, 0);
+
+  router.close();
+});
+
 test('handlePermissionUi validates actor and dispatches to runtime', async () => {
   const db = createDb();
   const router = new GatewayRouter({ db, config: createConfig() as any });

@@ -9,7 +9,7 @@ import {
   updateAcpSessionId,
   updateLoadSupported,
 } from './sessionStore.js';
-import { ToolAuth, type ToolKind } from './toolAuth.js';
+import { ToolAuth, parseToolKind, type ToolKind } from './toolAuth.js';
 
 export class BindingRuntime {
   private readonly db: Db;
@@ -181,11 +181,19 @@ export class BindingRuntime {
 
           const toolKind = toToolKind(req.params.toolCall?.kind);
           if (toolKind) {
-            const policy = this.toolAuth.getPersistentPolicy(
+            const policy = this.toolAuth.evaluatePersistentPolicy(
               this.bindingKey,
               toolKind,
+              {
+                toolCall: req.params.toolCall,
+                workspaceRoot: this.workspaceRoot,
+              },
             );
-            if (policy === 'allow') {
+            const hasScopedAllowRules =
+              this.toolAuth.listAllowPrefixRules(this.bindingKey, toolKind)
+                .length > 0;
+
+            if (policy === 'allow' || (policy !== 'reject' && hasScopedAllowRules)) {
               const option = req.params.options.find(
                 (o) => o.kind === 'allow_always' || o.kind === 'allow_once',
               );
@@ -590,22 +598,7 @@ export class BindingRuntime {
 }
 
 function toToolKind(kind: unknown): ToolKind | null {
-  if (typeof kind !== 'string') return null;
-
-  const allowed: ToolKind[] = [
-    'read',
-    'edit',
-    'delete',
-    'move',
-    'search',
-    'execute',
-    'think',
-    'fetch',
-    'switch_mode',
-    'other',
-  ];
-
-  return allowed.includes(kind as ToolKind) ? (kind as ToolKind) : null;
+  return parseToolKind(kind);
 }
 
 function formatPermissionRequest(req: PermissionRequest): string {
