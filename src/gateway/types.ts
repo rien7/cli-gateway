@@ -12,6 +12,8 @@ export type PermissionUiRequest = {
   requestId: string;
   toolTitle: string;
   toolKind: string | null;
+  toolName?: string;
+  toolArgs?: unknown;
 };
 
 export type UiEvent =

@@ -759,6 +759,8 @@ function buildLocalPermissionRequest(params: {
       toolCall: {
         title: buildLocalToolTitle(params.method, params.params),
         kind: params.kind,
+        name: params.method,
+        arguments: buildLocalPermissionArgs(params.params),
       },
       options: [
         { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
@@ -808,6 +810,39 @@ function buildLocalToolTitle(method: string, rawParams: unknown): string {
   }
 
   return truncateInline(method, 180);
+}
+
+function buildLocalPermissionArgs(rawParams: unknown): unknown {
+  if (!rawParams || typeof rawParams !== 'object' || Array.isArray(rawParams)) {
+    return rawParams;
+  }
+
+  const source = rawParams as Record<string, unknown>;
+  const args: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key === 'sessionId') continue;
+    args[key] = sanitizePermissionArgValue(key, value);
+  }
+
+  return args;
+}
+
+function sanitizePermissionArgValue(key: string, value: unknown): unknown {
+  if (key === 'content' && typeof value === 'string') {
+    return value.length > 240
+      ? `${value.slice(0, 237)}... (${value.length} chars)`
+      : value;
+  }
+
+  if (key === 'env' && Array.isArray(value)) {
+    return value.map((item) => {
+      if (!item || typeof item !== 'object') return '<env>';
+      const name = (item as { name?: unknown }).name;
+      return typeof name === 'string' && name.trim() ? name.trim() : '<env>';
+    });
+  }
+
+  return value;
 }
 
 function truncateInline(text: string, maxLen: number): string {

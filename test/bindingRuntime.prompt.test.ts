@@ -818,6 +818,8 @@ test('BindingRuntime prompts interactively when tool is called without session/r
   assert.equal(out.stopReason, 'end');
   assert.equal(permissionRequests.length, 1);
   assert.equal(permissionRequests[0].toolKind, 'read');
+  assert.equal(permissionRequests[0].toolName, 'fs/read_text_file');
+  assert.equal(permissionRequests[0].toolArgs?.path, filePath);
   assert.ok(String(permissionRequests[0].toolTitle).includes(filePath));
   assert.ok(chunks.join('').includes('done'));
 

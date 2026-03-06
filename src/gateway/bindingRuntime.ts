@@ -123,9 +123,11 @@ export class BindingRuntime {
                 });
               } else {
                 await sink.sendText(
-                  this.currentUiMode === 'verbose'
-                    ? `\n[tool]\n${ui.title}\n${detail ?? ''}\n`
-                    : `\n[tool] ${ui.title}`,
+                  formatTextCodeBlock(
+                    this.currentUiMode === 'verbose'
+                      ? `[tool]\n${ui.title}\n${detail ?? ''}`
+                      : `[tool] ${ui.title}`,
+                  ),
                 );
               }
             }
@@ -208,7 +210,11 @@ export class BindingRuntime {
                 this.enqueueSinkWrite(async () => {
                   const sink = this.activeSink;
                   if (!sink) return;
-                  await sink.sendText(`[permission] auto-allowed (${toolKind})`);
+                  await sink.sendText(
+                    formatTextCodeBlock(
+                      `[permission] auto-allowed (${toolKind})`,
+                    ),
+                  );
                 });
                 return;
               }
@@ -227,7 +233,11 @@ export class BindingRuntime {
                 this.enqueueSinkWrite(async () => {
                   const sink = this.activeSink;
                   if (!sink) return;
-                  await sink.sendText(`[permission] auto-rejected (${toolKind})`);
+                  await sink.sendText(
+                    formatTextCodeBlock(
+                      `[permission] auto-rejected (${toolKind})`,
+                    ),
+                  );
                 });
                 return;
               }
@@ -238,6 +248,12 @@ export class BindingRuntime {
             req.params.toolCall?.title ??
             req.params.toolCall?.toolCallId ??
             'tool_call';
+          const toolName = resolvePermissionToolName(
+            req.params.toolCall,
+            toolKind,
+            title,
+          );
+          const toolArgs = resolvePermissionToolArgs(req.params.toolCall);
 
           this.enqueueSinkWrite(async () => {
             const sink = this.activeSink;
@@ -250,6 +266,8 @@ export class BindingRuntime {
                 requestId: String(req.requestId),
                 toolTitle: title,
                 toolKind: toolKind ?? null,
+                toolName,
+                toolArgs,
               });
               return;
             }
@@ -606,7 +624,19 @@ function formatPermissionRequest(req: PermissionRequest): string {
     .map((o, i) => `${i + 1}. ${o.name} (${o.kind})`)
     .join('\n');
 
-  return `\n[permission required]\nTool: ${req.params.toolCall?.title ?? req.params.toolCall?.toolCallId ?? 'tool_call'}\n${options}\nReply with /allow <n> or /deny`;
+  return formatTextCodeBlock(
+    [
+      '[permission required]',
+      `Tool: ${req.params.toolCall?.title ?? req.params.toolCall?.toolCallId ?? 'tool_call'}`,
+      options,
+      'Reply with /allow <n> or /deny',
+    ].join('\n'),
+  );
+}
+
+function formatTextCodeBlock(text: string): string {
+  const safe = text.trim().replace(/```/g, '``\u200b`');
+  return `\n\`\`\`text\n${safe}\n\`\`\`\n`;
 }
 
 function renderJson(value: unknown, maxChars: number): string {
@@ -1017,3 +1047,99 @@ function getPathValue(root: unknown, pathExpr: string): unknown {
   }
   return current;
 }
+
+function resolvePermissionToolName(
+  toolCall: unknown,
+  fallbackKind: ToolKind | null,
+  fallbackTitle: string,
+): string {
+  const record = asRecord(toolCall);
+  const candidates: unknown[] = [
+    record?.name,
+    record?.method,
+    record?.tool,
+    record?.kind,
+    fallbackKind,
+    fallbackTitle,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const trimmed = candidate.trim();
+    if (trimmed) return trimmed;
+  }
+  return 'tool_call';
+}
+
+function resolvePermissionToolArgs(toolCall: unknown): unknown {
+  const record = asRecord(toolCall);
+  if (!record) return null;
+
+  const direct = parsePermissionJson(
+    record.arguments ?? record.input ?? record.params,
+  );
+  const directRecord = asRecord(direct);
+
+  const remainder: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (value === undefined) continue;
+    if (PERMISSION_TOOL_META_FIELDS.has(key)) continue;
+    if (PERMISSION_TOOL_ARG_CONTAINER_FIELDS.has(key)) continue;
+    remainder[key] = parsePermissionJson(value);
+  }
+
+  if (directRecord) {
+    if (Object.keys(remainder).length === 0) return directRecord;
+    return { ...remainder, ...directRecord };
+  }
+  if (direct !== undefined && direct !== null) return direct;
+  return Object.keys(remainder).length > 0 ? remainder : null;
+}
+
+function parsePermissionJson(value: unknown): unknown {
+  let current: unknown = value;
+  for (let depth = 0; depth < 2; depth += 1) {
+    if (typeof current !== 'string') return current;
+
+    const trimmed = current.trim();
+    if (!trimmed || !looksLikeJsonValue(trimmed)) return current;
+
+    try {
+      current = JSON.parse(trimmed);
+    } catch {
+      return current;
+    }
+  }
+
+  return current;
+}
+
+function looksLikeJsonValue(value: string): boolean {
+  return (
+    (value.startsWith('{') && value.endsWith('}')) ||
+    (value.startsWith('[') && value.endsWith(']')) ||
+    (value.startsWith('"') && value.endsWith('"'))
+  );
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+const PERMISSION_TOOL_META_FIELDS = new Set([
+  'title',
+  'kind',
+  'name',
+  'method',
+  'tool',
+  'toolCallId',
+  'tool_call_id',
+  'id',
+]);
+
+const PERMISSION_TOOL_ARG_CONTAINER_FIELDS = new Set([
+  'arguments',
+  'input',
+  'params',
+]);
