@@ -221,13 +221,13 @@ async function upsertToolUiMessage(params: {
 }
 
 function formatToolUiText(event: ToolUiEvent): string {
-  const safeTitle = truncate(event.title, 500);
-  const header = `<b>[tool]</b> ${escapeHtml(safeTitle)}`;
-  if (event.detail && event.mode === 'verbose') {
-    const code = escapeHtml(truncate(event.detail, 3200));
-    return `${header}\n\n<pre><code>${code}</code></pre>`;
-  }
-  return header;
+  const header = `[tool] ${truncate(event.title, 500)}`;
+  const content =
+    event.detail && event.mode === 'verbose'
+      ? `${header}\n\n${event.detail}`
+      : header;
+  const code = escapeHtml(truncate(content, 3300));
+  return `<pre><code>${code}</code></pre>`;
 }
 
 function truncate(text: string, maxLen: number): string {

@@ -1164,9 +1164,11 @@ function renderSessionUpdateDelta(update: any): string {
         ? 'started'
         : String(update?.status ?? update?.state ?? 'running').trim() || 'running';
     const title = String(update?.title ?? id ?? 'tool_call').trim() || 'tool_call';
-    return id
-      ? `\n[tool] ${title} · ${status} (${id})`
-      : `\n[tool] ${title} · ${status}`;
+    return formatTextCodeBlock(
+      id
+        ? `[tool] ${title} · ${status} (${id})`
+        : `[tool] ${title} · ${status}`,
+    );
   }
 
   if (update.sessionUpdate === 'plan') {
@@ -1179,6 +1181,11 @@ function renderSessionUpdateDelta(update: any): string {
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return text.slice(0, max - 3) + '...';
+}
+
+function formatTextCodeBlock(text: string): string {
+  const safe = text.trim().replace(/```/g, '``\u200b`');
+  return `\n\`\`\`text\n${safe}\n\`\`\`\n`;
 }
 
 function whitelistUsageText(): string {
