@@ -84,6 +84,17 @@ type PendingRequest = {
 };
 
 const ACP_BOOTSTRAP_TIMEOUT_MS = 30_000;
+const ACP_PROMPT_UPDATE_IDLE_MS = 150;
+const ACP_PROMPT_UPDATE_MAX_WAIT_MS = 1_500;
+
+type PromptDrainState = {
+  runId: string;
+  settled: boolean;
+  idleTimer: NodeJS.Timeout | null;
+  maxTimer: NodeJS.Timeout | null;
+  resolve: () => void;
+  bump: () => void;
+};
 
 export class AcpClient {
   private readonly db: Db;
@@ -91,6 +102,8 @@ export class AcpClient {
   private readonly agentCommand: string;
   private readonly agentArgs: string[];
   private readonly toolAuth: ToolAuth | null;
+  private readonly promptUpdateIdleMs: number;
+  private readonly promptUpdateMaxWaitMs: number;
 
   private readonly rpc: StdioProcess;
   private nextId = 1;
@@ -107,6 +120,7 @@ export class AcpClient {
       reject: (error: Error) => void;
     }
   >();
+  private promptDrainState: PromptDrainState | null = null;
 
   private readonly events: AcpClientEvents;
 
@@ -118,12 +132,22 @@ export class AcpClient {
     toolAuth?: ToolAuth;
     events?: AcpClientEvents;
     rpc?: StdioProcess;
+    promptUpdateIdleMs?: number;
+    promptUpdateMaxWaitMs?: number;
   }) {
     this.db = params.db;
     this.workspaceRoot = params.workspaceRoot;
     this.agentCommand = params.agentCommand;
     this.agentArgs = params.agentArgs;
     this.toolAuth = params.toolAuth ?? null;
+    this.promptUpdateIdleMs = Math.max(
+      0,
+      params.promptUpdateIdleMs ?? ACP_PROMPT_UPDATE_IDLE_MS,
+    );
+    this.promptUpdateMaxWaitMs = Math.max(
+      this.promptUpdateIdleMs,
+      params.promptUpdateMaxWaitMs ?? ACP_PROMPT_UPDATE_MAX_WAIT_MS,
+    );
     this.events = params.events ?? {};
 
     this.rpc =
@@ -149,6 +173,7 @@ export class AcpClient {
   }
 
   close(): void {
+    this.clearPromptDrainState();
     this.rejectAllPending(this.makeTransportError('ACP client closed'));
     this.rejectAllLocalPermissions(this.makeTransportError('ACP client closed'));
     this.rpc.kill();
@@ -190,6 +215,7 @@ export class AcpClient {
   }
 
   async prompt(run: AcpRun, params: PromptParams): Promise<PromptResult> {
+    this.clearPromptDrainState();
     this.currentRun = run;
     this.runSeq.set(run.runId, 0);
 
@@ -198,8 +224,10 @@ export class AcpClient {
         'session/prompt',
         params,
       );
+      await this.waitForPromptUpdatesToDrain(run.runId);
       return result;
     } finally {
+      this.clearPromptDrainState(run.runId);
       this.currentRun = null;
       this.runSeq.delete(run.runId);
     }
@@ -257,6 +285,7 @@ export class AcpClient {
         const sessionId = params?.sessionId as string | undefined;
         const update = params?.update;
         if (this.currentRun && sessionId) {
+          this.promptDrainState?.bump();
           const eventSeq = this.appendEvent(
             this.currentRun.runId,
             'session/update',
@@ -506,6 +535,76 @@ export class AcpClient {
         );
       }
     });
+  }
+
+  private waitForPromptUpdatesToDrain(runId: string): Promise<void> {
+    this.clearPromptDrainState();
+
+    return new Promise((resolve) => {
+      const state: PromptDrainState = {
+        runId,
+        settled: false,
+        idleTimer: null,
+        maxTimer: null,
+        resolve: () => {
+          this.settlePromptDrainState(state, resolve);
+        },
+        bump: () => {
+          this.schedulePromptDrainIdle(state);
+        },
+      };
+
+      this.promptDrainState = state;
+      this.schedulePromptDrainIdle(state);
+      state.maxTimer = setTimeout(() => {
+        this.settlePromptDrainState(state, resolve);
+      }, this.promptUpdateMaxWaitMs);
+    });
+  }
+
+  private schedulePromptDrainIdle(state: PromptDrainState): void {
+    if (this.promptDrainState !== state || state.settled) return;
+
+    if (state.idleTimer) {
+      clearTimeout(state.idleTimer);
+    }
+
+    state.idleTimer = setTimeout(() => {
+      state.resolve();
+    }, this.promptUpdateIdleMs);
+  }
+
+  private settlePromptDrainState(
+    state: PromptDrainState,
+    resolve: () => void,
+  ): void {
+    if (this.promptDrainState !== state || state.settled) return;
+
+    state.settled = true;
+    this.clearPromptDrainTimers(state);
+    this.promptDrainState = null;
+    resolve();
+  }
+
+  private clearPromptDrainState(runId?: string): void {
+    const state = this.promptDrainState;
+    if (!state) return;
+    if (runId && state.runId !== runId) return;
+
+    this.clearPromptDrainTimers(state);
+    this.promptDrainState = null;
+  }
+
+  private clearPromptDrainTimers(state: PromptDrainState): void {
+    if (state.idleTimer) {
+      clearTimeout(state.idleTimer);
+      state.idleTimer = null;
+    }
+
+    if (state.maxTimer) {
+      clearTimeout(state.maxTimer);
+      state.maxTimer = null;
+    }
   }
 
   private rejectPendingRequest(id: JsonRpcId, error: Error): void {

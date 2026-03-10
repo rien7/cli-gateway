@@ -48,6 +48,7 @@ This document lists current gaps (vs a "production gateway") and the planned dir
 - Discord permission approvals now support emoji reactions (`✅`/`👍` allow, `❌`/`👎` deny) in addition to buttons.
 - Gateway now synthesizes interactive permission prompts when an agent calls tools directly without `session/request_permission`, preserving deny-by-default UX.
 - Agent text streaming now auto-splits around tool calls (text-only updates keep editing one message; post-tool assistant output resumes in a new message).
+- ACP prompt completion now waits for a short `session/update` quiet window (with max wait cap) so late trailing updates are less likely to be dropped.
 - Fresh Discord sessions now inject channel topic/description as global context (alongside context replay when enabled).
 - Added `/whitelist` command to manage per-conversation permission allowlist by `tool_kind` with optional path/argument prefix scoping.
 

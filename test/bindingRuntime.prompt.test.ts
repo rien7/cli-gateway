@@ -505,6 +505,174 @@ class UiFlushRpc implements StdioProcess {
   }
 }
 
+class LateChunkAfterPromptResultRpc implements StdioProcess {
+  private messageHandlers: Array<(m: JsonRpcMessage) => void> = [];
+  private sessionId = 'sess-late-chunk';
+  private promptRequestId: number | null = null;
+
+  write(message: JsonRpcMessage): void {
+    if (!('method' in message)) return;
+    const req = message as JsonRpcRequest;
+
+    if (req.method === 'initialize') {
+      queueMicrotask(() => {
+        this.emit({
+          jsonrpc: '2.0',
+          id: req.id,
+          result: {
+            protocolVersion: 1,
+            agentCapabilities: { loadSession: false },
+          },
+        } as JsonRpcResponse);
+      });
+      return;
+    }
+
+    if (req.method === 'session/new') {
+      queueMicrotask(() => {
+        this.emit({
+          jsonrpc: '2.0',
+          id: req.id,
+          result: { sessionId: this.sessionId },
+        } as JsonRpcResponse);
+      });
+      return;
+    }
+
+    if (req.method === 'session/prompt') {
+      this.promptRequestId = Number(req.id);
+      queueMicrotask(() => {
+        this.emit({
+          jsonrpc: '2.0',
+          id: this.promptRequestId!,
+          result: { stopReason: 'end' },
+        } as JsonRpcResponse);
+
+        queueMicrotask(() => {
+          this.emit({
+            jsonrpc: '2.0',
+            method: 'session/update',
+            params: {
+              sessionId: this.sessionId,
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'tail chunk' },
+              },
+            },
+          } as any);
+        });
+      });
+    }
+  }
+
+  onMessage(cb: (message: JsonRpcMessage) => void): void {
+    this.messageHandlers.push(cb);
+  }
+
+  onStderr(): void {
+    // noop
+  }
+
+  kill(): void {
+    // noop
+  }
+
+  private emit(message: JsonRpcMessage): void {
+    this.messageHandlers.forEach((h) => h(message));
+  }
+}
+
+class ResettingLateChunksRpc implements StdioProcess {
+  private messageHandlers: Array<(m: JsonRpcMessage) => void> = [];
+  private sessionId = 'sess-resetting-late-chunks';
+  private promptRequestId: number | null = null;
+
+  write(message: JsonRpcMessage): void {
+    if (!('method' in message)) return;
+    const req = message as JsonRpcRequest;
+
+    if (req.method === 'initialize') {
+      queueMicrotask(() => {
+        this.emit({
+          jsonrpc: '2.0',
+          id: req.id,
+          result: {
+            protocolVersion: 1,
+            agentCapabilities: { loadSession: false },
+          },
+        } as JsonRpcResponse);
+      });
+      return;
+    }
+
+    if (req.method === 'session/new') {
+      queueMicrotask(() => {
+        this.emit({
+          jsonrpc: '2.0',
+          id: req.id,
+          result: { sessionId: this.sessionId },
+        } as JsonRpcResponse);
+      });
+      return;
+    }
+
+    if (req.method === 'session/prompt') {
+      this.promptRequestId = Number(req.id);
+      queueMicrotask(() => {
+        this.emit({
+          jsonrpc: '2.0',
+          id: this.promptRequestId!,
+          result: { stopReason: 'end' },
+        } as JsonRpcResponse);
+
+        setTimeout(() => {
+          this.emit({
+            jsonrpc: '2.0',
+            method: 'session/update',
+            params: {
+              sessionId: this.sessionId,
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'first chunk' },
+              },
+            },
+          } as any);
+        }, 100);
+
+        setTimeout(() => {
+          this.emit({
+            jsonrpc: '2.0',
+            method: 'session/update',
+            params: {
+              sessionId: this.sessionId,
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: ' second chunk' },
+              },
+            },
+          } as any);
+        }, 220);
+      });
+    }
+  }
+
+  onMessage(cb: (message: JsonRpcMessage) => void): void {
+    this.messageHandlers.push(cb);
+  }
+
+  onStderr(): void {
+    // noop
+  }
+
+  kill(): void {
+    // noop
+  }
+
+  private emit(message: JsonRpcMessage): void {
+    this.messageHandlers.forEach((h) => h(message));
+  }
+}
+
 class ActionSummaryRpc implements StdioProcess {
   private messageHandlers: Array<(m: JsonRpcMessage) => void> = [];
   private promptRequestId: number | null = null;
@@ -1022,6 +1190,174 @@ test('BindingRuntime prompt waits for pending summary tool UI delivery', async (
     uiEvents.filter((e) => e.kind === 'tool').map((e) => e.title),
     ['terminal/create · started', 'terminal/create · completed'],
   );
+
+  rt.close();
+  db.close();
+});
+
+test('BindingRuntime prompt keeps trailing agent chunks that arrive after prompt result', async () => {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  migrate(db);
+
+  const workspaceRoot = fs.mkdtempSync('/tmp/cli-gateway-test-');
+
+  const key: ConversationKey = {
+    platform: 'discord',
+    chatId: 'c-late',
+    threadId: null,
+    userId: 'u-late',
+  };
+
+  const sessionKey = 's-late';
+  createSession(db, {
+    sessionKey,
+    agentCommand: 'agent',
+    agentArgs: [],
+    cwd: workspaceRoot,
+    loadSupported: false,
+  });
+
+  const bindingKey = upsertBinding(db, key, sessionKey).bindingKey;
+  const toolAuth = new ToolAuth(db);
+
+  const rt = new BindingRuntime({
+    db,
+    config: {
+      discordToken: undefined,
+      discordAllowChannelId: undefined,
+      telegramToken: undefined,
+      feishuAppId: undefined,
+      feishuAppSecret: undefined,
+      feishuVerificationToken: undefined,
+      feishuListenPort: 3030,
+      acpAgentCommand: 'node',
+      acpAgentArgs: [],
+      workspaceRoot,
+      dbPath: ':memory:',
+      schedulerEnabled: false,
+      runtimeIdleTtlSeconds: 999,
+      maxBindingRuntimes: 5,
+      uiDefaultMode: 'verbose',
+      uiJsonMaxChars: 10_000,
+      contextReplayEnabled: false,
+      contextReplayRuns: 0,
+      contextReplayMaxChars: 0,
+    } as any,
+    toolAuth,
+    sessionKey,
+    bindingKey,
+    acpRpc: new LateChunkAfterPromptResultRpc(),
+    workspaceRoot,
+  });
+
+  createRun(db, { runId: 'r-late', sessionKey, promptText: 'go' });
+
+  const chunks: string[] = [];
+  const result = await rt.prompt({
+    runId: 'r-late',
+    promptText: 'go',
+    sink: {
+      sendText: async (t) => {
+        chunks.push(t);
+      },
+    },
+    uiMode: 'verbose',
+  });
+
+  assert.equal(result.stopReason, 'end');
+  assert.equal(chunks.join(''), 'tail chunk');
+
+  const eventRows = db
+    .prepare('SELECT method, payload_json as payloadJson FROM events WHERE run_id = ?')
+    .all('r-late') as Array<{ method: string; payloadJson: string }>;
+  assert.ok(
+    eventRows.some((row) => {
+      if (row.method !== 'session/update') return false;
+      const payload = JSON.parse(row.payloadJson);
+      return payload?.update?.content?.text === 'tail chunk';
+    }),
+  );
+
+  rt.close();
+  db.close();
+});
+
+test('BindingRuntime prompt resets late-update idle window until stream goes quiet', async () => {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  migrate(db);
+
+  const workspaceRoot = fs.mkdtempSync('/tmp/cli-gateway-test-');
+
+  const key: ConversationKey = {
+    platform: 'discord',
+    chatId: 'c-late-reset',
+    threadId: null,
+    userId: 'u-late-reset',
+  };
+
+  const sessionKey = 's-late-reset';
+  createSession(db, {
+    sessionKey,
+    agentCommand: 'agent',
+    agentArgs: [],
+    cwd: workspaceRoot,
+    loadSupported: false,
+  });
+
+  const bindingKey = upsertBinding(db, key, sessionKey).bindingKey;
+  const toolAuth = new ToolAuth(db);
+
+  const rt = new BindingRuntime({
+    db,
+    config: {
+      discordToken: undefined,
+      discordAllowChannelId: undefined,
+      telegramToken: undefined,
+      feishuAppId: undefined,
+      feishuAppSecret: undefined,
+      feishuVerificationToken: undefined,
+      feishuListenPort: 3030,
+      acpAgentCommand: 'node',
+      acpAgentArgs: [],
+      workspaceRoot,
+      dbPath: ':memory:',
+      schedulerEnabled: false,
+      runtimeIdleTtlSeconds: 999,
+      maxBindingRuntimes: 5,
+      uiDefaultMode: 'verbose',
+      uiJsonMaxChars: 10_000,
+      contextReplayEnabled: false,
+      contextReplayRuns: 0,
+      contextReplayMaxChars: 0,
+    } as any,
+    toolAuth,
+    sessionKey,
+    bindingKey,
+    acpRpc: new ResettingLateChunksRpc(),
+    workspaceRoot,
+  });
+
+  createRun(db, { runId: 'r-late-reset', sessionKey, promptText: 'go' });
+
+  const startedAt = Date.now();
+  const chunks: string[] = [];
+  const result = await rt.prompt({
+    runId: 'r-late-reset',
+    promptText: 'go',
+    sink: {
+      sendText: async (text) => {
+        chunks.push(text);
+      },
+    },
+    uiMode: 'verbose',
+  });
+
+  const elapsedMs = Date.now() - startedAt;
+  assert.equal(result.stopReason, 'end');
+  assert.equal(chunks.join(''), 'first chunk second chunk');
+  assert.ok(elapsedMs >= 300, `expected quiet-window drain, got ${elapsedMs}ms`);
 
   rt.close();
   db.close();

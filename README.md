@@ -191,6 +191,7 @@ Discord note:
 Set per conversation: `/ui verbose|summary`.
 Tool-call UI is lifecycle-based (`started`/`running`/`completed`) and updates by tool-call id when supported by the channel sink.
 Agent text is streamed by editing one message while output is text-only; when a tool call starts, the next agent text segment resumes in a new message.
+After `session/prompt` returns, the gateway keeps the run open through a short `session/update` quiet window (with a max wait cap) so trailing agent chunks are less likely to be dropped.
 
 ## Conversation isolation
 
