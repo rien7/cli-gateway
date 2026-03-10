@@ -15,7 +15,7 @@ test('migrate creates schema at latest version', () => {
     .prepare('SELECT version FROM schema_version')
     .get() as { version: number };
 
-  assert.equal(version.version, 5);
+  assert.equal(version.version, 6);
 
   const tables = db
     .prepare(
@@ -36,6 +36,7 @@ test('migrate creates schema at latest version', () => {
     'tool_policies',
     'tool_allow_prefixes',
     'ui_prefs',
+    'workspace_agent_prefs',
   ]) {
     assert.ok(names.includes(expected), `missing table: ${expected}`);
   }

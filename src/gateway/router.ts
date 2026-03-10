@@ -28,6 +28,11 @@ import {
 } from '../db/jobStore.js';
 import { upsertDeliveryCheckpoint } from '../db/deliveryCheckpointStore.js';
 import { getUiMode, setUiMode } from '../db/uiPrefStore.js';
+import {
+  getWorkspaceAgentPrefs,
+  updateWorkspaceAgentPrefs,
+} from '../db/workspaceAgentPrefStore.js';
+import type { SessionConfigOption } from '../acp/types.js';
 import { ToolAuth, parseToolKind, TOOL_KINDS } from './toolAuth.js';
 import { BindingRuntime } from './bindingRuntime.js';
 import type { OutboundSink, UiMode } from './types.js';
@@ -358,6 +363,8 @@ export class GatewayRouter {
             '/ui verbose|summary',
             '/cli show|codex|claude',
             '/workspace show|<absolute-path>',
+            '/model show|list|clear|<model-id>',
+            '/effort show|list|clear|<level>',
             '/new',
             '/last',
             '/replay [runId]',
@@ -567,6 +574,157 @@ export class GatewayRouter {
         }
 
         await sink.sendText(`OK: workspace set to ${nextCwd}`);
+        return true;
+      }
+
+      case '/model': {
+        const { bindingKey, sessionKey } = this.ensureBindingExists(key);
+        const sess = getSession(this.db, sessionKey);
+        if (!sess) {
+          await sink.sendText('Missing session row.');
+          return true;
+        }
+
+        const arg = parts.slice(1).join(' ').trim();
+        const prefs = getWorkspaceAgentPrefs(this.db, sess.cwd);
+
+        if (arg.toLowerCase() === 'clear') {
+          updateWorkspaceAgentPrefs(this.db, sess.cwd, { model: null });
+          await sink.sendText(
+            'OK: cleared workspace model preference. Current ACP session is unchanged until a fresh session starts.',
+          );
+          return true;
+        }
+
+        const rt = this.getOrCreateRuntime({ sessionKey, bindingKey });
+
+        if (!arg || arg.toLowerCase() === 'show') {
+          try {
+            const option = await rt.getSessionConfigOption('model');
+            if (!isSelectConfigOption(option)) {
+              await sink.sendText(
+                `Workspace model (${sess.cwd}): saved=${prefs?.model ?? '(default)'}`,
+              );
+              return true;
+            }
+
+            await sink.sendText(
+              formatWorkspaceConfigOptionStatus(
+                'Workspace model',
+                sess.cwd,
+                prefs?.model ?? null,
+                option,
+              ),
+            );
+          } catch (error: any) {
+            await sink.sendText(`Error: ${String(error?.message ?? error)}`);
+          }
+          return true;
+        }
+
+        if (arg.toLowerCase() === 'list') {
+          try {
+            const option = await rt.getSessionConfigOption('model');
+            if (!isSelectConfigOption(option)) {
+              await sink.sendText('Current agent does not expose a model selector.');
+              return true;
+            }
+
+            await sink.sendText(formatConfigOptionList('Models', option));
+          } catch (error: any) {
+            await sink.sendText(`Error: ${String(error?.message ?? error)}`);
+          }
+          return true;
+        }
+
+        try {
+          const option = await rt.setSessionConfigOption('model', arg);
+          const currentValue = getSelectConfigCurrentValue(option) ?? arg;
+          updateWorkspaceAgentPrefs(this.db, sess.cwd, { model: currentValue });
+          await sink.sendText(
+            `OK: workspace model for ${sess.cwd} set to ${currentValue}`,
+          );
+        } catch (error: any) {
+          await sink.sendText(`Error: ${String(error?.message ?? error)}`);
+        }
+        return true;
+      }
+
+      case '/effort':
+      case '/reasoning':
+      case '/capability': {
+        const { bindingKey, sessionKey } = this.ensureBindingExists(key);
+        const sess = getSession(this.db, sessionKey);
+        if (!sess) {
+          await sink.sendText('Missing session row.');
+          return true;
+        }
+
+        const arg = parts[1]?.trim().toLowerCase() ?? 'show';
+        const prefs = getWorkspaceAgentPrefs(this.db, sess.cwd);
+
+        if (arg === 'clear') {
+          updateWorkspaceAgentPrefs(this.db, sess.cwd, { reasoningEffort: null });
+          await sink.sendText(
+            'OK: cleared workspace reasoning effort preference. Current ACP session is unchanged until a fresh session starts.',
+          );
+          return true;
+        }
+
+        const rt = this.getOrCreateRuntime({ sessionKey, bindingKey });
+
+        let option: SessionConfigOption | null;
+        try {
+          option = await rt.getSessionConfigOption('reasoning_effort');
+        } catch (error: any) {
+          await sink.sendText(`Error: ${String(error?.message ?? error)}`);
+          return true;
+        }
+
+        if (!isSelectConfigOption(option)) {
+          await sink.sendText(
+            'Current agent/model does not expose reasoning effort options.',
+          );
+          return true;
+        }
+
+        if (!arg || arg === 'show') {
+          await sink.sendText(
+            formatWorkspaceConfigOptionStatus(
+              'Workspace reasoning effort',
+              sess.cwd,
+              prefs?.reasoningEffort ?? null,
+              option,
+            ),
+          );
+          return true;
+        }
+
+        if (arg === 'list') {
+          await sink.sendText(formatConfigOptionList('Reasoning Effort', option));
+          return true;
+        }
+
+        const allowed = new Set(listSelectConfigValues(option));
+        if (!allowed.has(arg)) {
+          await sink.sendText(
+            `Usage: /effort show|list|clear|${[...allowed].join('|')}`,
+          );
+          return true;
+        }
+
+        try {
+          const nextOption = await rt.setSessionConfigOption('reasoning_effort', arg);
+          const currentValue = getSelectConfigCurrentValue(nextOption) ?? arg;
+          updateWorkspaceAgentPrefs(this.db, sess.cwd, {
+            reasoningEffort: currentValue,
+          });
+          await sink.sendText(
+            `OK: workspace reasoning effort for ${sess.cwd} set to ${currentValue}`,
+          );
+        } catch (error: any) {
+          await sink.sendText(`Error: ${String(error?.message ?? error)}`);
+        }
         return true;
       }
 
@@ -1148,6 +1306,144 @@ function quoteArg(text: string): string {
   if (!text) return '""';
   if (!/[\s"'`$\\]/.test(text)) return text;
   return JSON.stringify(text);
+}
+
+function isSelectConfigOption(
+  option: SessionConfigOption | null,
+): option is Extract<SessionConfigOption, { type: 'select' }> {
+  return Boolean(option && option.type === 'select');
+}
+
+function getSelectConfigCurrentValue(option: SessionConfigOption | null): string | null {
+  return isSelectConfigOption(option) ? option.currentValue : null;
+}
+
+function listSelectConfigValues(option: Extract<SessionConfigOption, { type: 'select' }>): string[] {
+  return listSelectConfigItems(option).map((item) => item.value);
+}
+
+function listSelectConfigItems(
+  option: Extract<SessionConfigOption, { type: 'select' }>,
+): Array<{ value: string; name: string; description?: string; groupName?: string }> {
+  if (!Array.isArray(option.options)) return [];
+  if (option.options.length === 0) return [];
+
+  const first = option.options[0] as any;
+  if (Array.isArray(first?.options)) {
+    return (option.options as Array<{
+      name: string;
+      options: Array<{ value: string; name: string; description?: string }>;
+    }>).flatMap((group) =>
+      group.options.map((item) => ({
+        ...item,
+        groupName: group.name,
+      })),
+    );
+  }
+
+  return option.options as Array<{
+    value: string;
+    name: string;
+    description?: string;
+  }>;
+}
+
+function formatSelectConfigValue(
+  option: Extract<SessionConfigOption, { type: 'select' }>,
+  value: string | null | undefined,
+): string {
+  if (!value) return '(default)';
+  const item = listSelectConfigItems(option).find((entry) => entry.value === value);
+  if (!item?.name || item.name === value) return value;
+  return `${value} (${item.name})`;
+}
+
+function formatSelectConfigOptions(
+  option: Extract<SessionConfigOption, { type: 'select' }>,
+): string[] {
+  const items = listSelectConfigItems(option);
+  if (items.length === 0) return [];
+
+  const grouped = items.some((item) => item.groupName);
+  if (!grouped) {
+    return [items.map((item) => formatSelectConfigValue(option, item.value)).join(', ')];
+  }
+
+  const lines: string[] = [];
+  let currentGroup = '';
+  let currentItems: string[] = [];
+  for (const item of items) {
+    const groupName = item.groupName ?? 'Options';
+    if (groupName !== currentGroup) {
+      if (currentItems.length > 0) {
+        lines.push(`- [${currentGroup}] ${currentItems.join(', ')}`);
+      }
+      currentGroup = groupName;
+      currentItems = [];
+    }
+    currentItems.push(formatSelectConfigValue(option, item.value));
+  }
+  if (currentItems.length > 0) {
+    lines.push(`- [${currentGroup}] ${currentItems.join(', ')}`);
+  }
+  return lines;
+}
+
+function formatWorkspaceConfigOptionStatus(
+  title: string,
+  workspaceRoot: string,
+  savedValue: string | null,
+  option: Extract<SessionConfigOption, { type: 'select' }>,
+): string {
+  const lines = [
+    `${title} (${workspaceRoot}): saved=${formatSelectConfigValue(option, savedValue)}, current=${formatSelectConfigValue(option, option.currentValue)}`,
+  ];
+  const optionLines = formatSelectConfigOptions(option);
+  if (optionLines.length === 1) {
+    lines.push(`Options: ${optionLines[0]}`);
+  } else if (optionLines.length > 1) {
+    lines.push('Options:');
+    lines.push(...optionLines);
+  }
+  return lines.join('\n');
+}
+
+function formatConfigOptionList(
+  title: string,
+  option: Extract<SessionConfigOption, { type: 'select' }>,
+): string {
+  const lines = [`${title}: current=${formatSelectConfigValue(option, option.currentValue)}`];
+  if (!Array.isArray(option.options) || option.options.length === 0) {
+    return lines.join('\n');
+  }
+
+  const first = option.options[0] as any;
+  if (Array.isArray(first?.options)) {
+    for (const group of option.options as Array<{
+      name: string;
+      options: Array<{ value: string; name: string; description?: string }>;
+    }>) {
+      lines.push(`- [${group.name}]`);
+      for (const item of group.options) {
+        lines.push(
+          `  ${formatSelectConfigValue(option, item.value)}${item.description ? `: ${item.description}` : ''}`,
+        );
+      }
+    }
+    return lines.join('\n');
+  }
+
+  for (const item of option.options as Array<{
+    value: string;
+    name: string;
+    description?: string;
+  }>) {
+    lines.push(
+      `- ${formatSelectConfigValue(option, item.value)}${item.description ? `: ${item.description}` : ''}`,
+    );
+  }
+
+  return lines.join('\n');
 }
 
 function renderSessionUpdateDelta(update: any): string {

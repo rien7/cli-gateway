@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 
 import { migrate } from '../src/db/migrations.js';
+import { updateWorkspaceAgentPrefs } from '../src/db/workspaceAgentPrefStore.js';
 import { ToolAuth } from '../src/gateway/toolAuth.js';
 import { BindingRuntime } from '../src/gateway/bindingRuntime.js';
 import {
@@ -159,6 +160,116 @@ class BranchingRpc implements StdioProcess {
           result: { stopReason: 'end' },
         } as JsonRpcResponse);
       });
+    }
+  }
+
+  onMessage(cb: (message: JsonRpcMessage) => void): void {
+    this.handlers.push(cb);
+  }
+
+  onStderr(): void {}
+  kill(): void {}
+
+  private emit(message: JsonRpcMessage): void {
+    this.handlers.forEach((h) => h(message));
+  }
+}
+
+class SessionConfigRpc implements StdioProcess {
+  private handlers: Array<(m: JsonRpcMessage) => void> = [];
+  readonly configCalls: Array<{ configId: string; value: string }> = [];
+  private sessionId = 'sess-config';
+
+  write(message: JsonRpcMessage): void {
+    if (!('method' in message)) return;
+
+    const req = message as JsonRpcRequest;
+    if (req.method === 'initialize') {
+      queueMicrotask(() =>
+        this.emit({
+          jsonrpc: '2.0',
+          id: req.id,
+          result: { protocolVersion: 1, agentCapabilities: {} },
+        } as any),
+      );
+      return;
+    }
+
+    if (req.method === 'session/new') {
+      queueMicrotask(() =>
+        this.emit({
+          jsonrpc: '2.0',
+          id: req.id,
+          result: {
+            sessionId: this.sessionId,
+            configOptions: [
+              {
+                id: 'model',
+                name: 'Model',
+                type: 'select',
+                currentValue: 'gpt-5',
+                options: [
+                  { value: 'gpt-5', name: 'GPT-5' },
+                  { value: 'gpt-5-codex', name: 'GPT-5 Codex' },
+                ],
+              },
+              {
+                id: 'reasoning_effort',
+                name: 'Reasoning Effort',
+                type: 'select',
+                currentValue: 'medium',
+                options: [
+                  { value: 'medium', name: 'Medium' },
+                  { value: 'high', name: 'High' },
+                  { value: 'xhigh', name: 'XHigh' },
+                ],
+              },
+            ],
+          },
+        } as any),
+      );
+      return;
+    }
+
+    if (req.method === 'session/set_config_option') {
+      const params = req.params as { configId: string; value: string };
+      this.configCalls.push({ configId: params.configId, value: params.value });
+
+      queueMicrotask(() =>
+        this.emit({
+          jsonrpc: '2.0',
+          id: req.id,
+          result: {
+            configOptions: [
+              {
+                id: 'model',
+                name: 'Model',
+                type: 'select',
+                currentValue:
+                  params.configId === 'model' ? params.value : 'gpt-5-codex',
+                options: [
+                  { value: 'gpt-5', name: 'GPT-5' },
+                  { value: 'gpt-5-codex', name: 'GPT-5 Codex' },
+                ],
+              },
+              {
+                id: 'reasoning_effort',
+                name: 'Reasoning Effort',
+                type: 'select',
+                currentValue:
+                  params.configId === 'reasoning_effort'
+                    ? params.value
+                    : 'xhigh',
+                options: [
+                  { value: 'medium', name: 'Medium' },
+                  { value: 'high', name: 'High' },
+                  { value: 'xhigh', name: 'XHigh' },
+                ],
+              },
+            ],
+          },
+        } as any),
+      );
     }
   }
 
@@ -1002,6 +1113,77 @@ test('selectPermissionOption and decidePermission validate actor and pending sta
   const noPending = await rt.decidePermission({ decision: 'allow' });
   assert.equal(noPending.ok, false);
   assert.ok(noPending.message.includes('No pending permission request'));
+
+  rt.close();
+  db.close();
+});
+
+test('ensureSessionId reapplies stored workspace model and reasoning prefs', async () => {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  migrate(db);
+
+  const key: ConversationKey = {
+    platform: 'discord',
+    chatId: 'c',
+    threadId: null,
+    userId: 'u',
+  };
+
+  createSession(db, {
+    sessionKey: 's5',
+    agentCommand: 'agent',
+    agentArgs: [],
+    cwd: '/tmp/project-a',
+    loadSupported: false,
+  });
+  const bindingKey = upsertBinding(db, key, 's5').bindingKey;
+
+  updateWorkspaceAgentPrefs(db, '/tmp/project-a', {
+    model: 'gpt-5-codex',
+    reasoningEffort: 'xhigh',
+  });
+
+  const rpc = new SessionConfigRpc();
+  const rt = new BindingRuntime({
+    db,
+    config: {
+      discordToken: undefined,
+      discordAllowChannelId: undefined,
+      telegramToken: undefined,
+      feishuAppId: undefined,
+      feishuAppSecret: undefined,
+      feishuVerificationToken: undefined,
+      feishuListenPort: 3030,
+      acpAgentCommand: 'node',
+      acpAgentArgs: [],
+      workspaceRoot: '/tmp',
+      dbPath: ':memory:',
+      schedulerEnabled: false,
+      runtimeIdleTtlSeconds: 999,
+      maxBindingRuntimes: 5,
+      uiDefaultMode: 'verbose',
+      uiJsonMaxChars: 1000,
+      contextReplayEnabled: false,
+      contextReplayRuns: 0,
+      contextReplayMaxChars: 0,
+    } as any,
+    toolAuth: new ToolAuth(db),
+    sessionKey: 's5',
+    bindingKey,
+    acpRpc: rpc,
+    workspaceRoot: '/tmp/project-a',
+  });
+
+  const sessionId = await rt.ensureSessionId();
+  assert.equal(sessionId, 'sess-config');
+  assert.deepEqual(rpc.configCalls, [
+    { configId: 'model', value: 'gpt-5-codex' },
+    { configId: 'reasoning_effort', value: 'xhigh' },
+  ]);
+
+  const effortOption = await rt.getSessionConfigOption('reasoning_effort');
+  assert.equal((effortOption as any)?.currentValue, 'xhigh');
 
   rt.close();
   db.close();

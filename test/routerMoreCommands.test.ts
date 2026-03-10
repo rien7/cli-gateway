@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 
 import { migrate } from '../src/db/migrations.js';
 import { GatewayRouter } from '../src/gateway/router.js';
+import { getWorkspaceAgentPrefs } from '../src/db/workspaceAgentPrefStore.js';
 import {
   createRun,
   createSession,
@@ -171,6 +172,167 @@ test('/cli show and switch updates session agent config', async () => {
     '-y',
     '@zed-industries/claude-code-acp@latest',
   ]);
+
+  router.close();
+});
+
+test('/model and /effort manage workspace-scoped agent prefs', async () => {
+  const db = createDb();
+  const runtimeCalls: Array<{ optionId: string; value: string }> = [];
+
+  const router = new GatewayRouter({
+    db,
+    config: createConfig() as any,
+    runtimeFactory: ({ workspaceRoot }) =>
+      ({
+        hasSessionId: () => true,
+        getSessionConfigOption: async (optionId: string) => {
+          if (optionId === 'model') {
+            return {
+              id: 'model',
+              name: 'Model',
+              type: 'select',
+              currentValue: 'gpt-5',
+              options: [
+                { value: 'gpt-5', name: 'GPT-5' },
+                { value: 'gpt-5-codex', name: 'GPT-5 Codex' },
+              ],
+            };
+          }
+
+          return {
+            id: 'reasoning_effort',
+            name: 'Reasoning Effort',
+            type: 'select',
+            currentValue: 'high',
+            options: [
+              { value: 'medium', name: 'Medium' },
+              { value: 'high', name: 'High' },
+              { value: 'xhigh', name: 'XHigh' },
+            ],
+          };
+        },
+        setSessionConfigOption: async (optionId: string, value: string) => {
+          runtimeCalls.push({ optionId, value });
+          if (optionId === 'model') {
+            return {
+              id: 'model',
+              name: 'Model',
+              type: 'select',
+              currentValue: value,
+              options: [{ value, name: value }],
+            };
+          }
+
+          return {
+            id: 'reasoning_effort',
+            name: 'Reasoning Effort',
+            type: 'select',
+            currentValue: value,
+            options: [
+              { value: 'medium', name: 'Medium' },
+              { value: 'high', name: 'High' },
+              { value: 'xhigh', name: 'XHigh' },
+            ],
+          };
+        },
+        close: () => void workspaceRoot,
+      }) as any,
+  });
+
+  const key: ConversationKey = {
+    platform: 'discord',
+    chatId: 'c',
+    threadId: null,
+    userId: 'u',
+  };
+
+  createSession(db, {
+    sessionKey: 's1',
+    agentCommand: 'agent',
+    agentArgs: [],
+    cwd: '/tmp/work-a',
+    loadSupported: false,
+  });
+  upsertBinding(db, key, 's1');
+
+  const { sink, texts } = createSink();
+
+  await router.handleUserMessage(key, '/model show', sink as any);
+  assert.equal(
+    texts.at(-1),
+    [
+      'Workspace model (/tmp/work-a): saved=(default), current=gpt-5 (GPT-5)',
+      'Options: gpt-5 (GPT-5), gpt-5-codex (GPT-5 Codex)',
+    ].join('\n'),
+  );
+
+  texts.length = 0;
+  await router.handleUserMessage(key, '/model list', sink as any);
+  assert.equal(
+    texts.at(-1),
+    [
+      'Models: current=gpt-5 (GPT-5)',
+      '- gpt-5 (GPT-5)',
+      '- gpt-5-codex (GPT-5 Codex)',
+    ].join('\n'),
+  );
+
+  texts.length = 0;
+  await router.handleUserMessage(key, '/model gpt-5-codex', sink as any);
+  assert.equal(
+    texts.at(-1),
+    'OK: workspace model for /tmp/work-a set to gpt-5-codex',
+  );
+
+  texts.length = 0;
+  await router.handleUserMessage(key, '/effort xhigh', sink as any);
+  assert.equal(
+    texts.at(-1),
+    'OK: workspace reasoning effort for /tmp/work-a set to xhigh',
+  );
+
+  texts.length = 0;
+  await router.handleUserMessage(key, '/effort show', sink as any);
+  assert.equal(
+    texts.at(-1),
+    [
+      'Workspace reasoning effort (/tmp/work-a): saved=xhigh (XHigh), current=high (High)',
+      'Options: medium (Medium), high (High), xhigh (XHigh)',
+    ].join('\n'),
+  );
+
+  texts.length = 0;
+  await router.handleUserMessage(key, '/effort list', sink as any);
+  assert.equal(
+    texts.at(-1),
+    [
+      'Reasoning Effort: current=high (High)',
+      '- medium (Medium)',
+      '- high (High)',
+      '- xhigh (XHigh)',
+    ].join('\n'),
+  );
+
+  assert.deepEqual(runtimeCalls, [
+    { optionId: 'model', value: 'gpt-5-codex' },
+    { optionId: 'reasoning_effort', value: 'xhigh' },
+  ]);
+
+  assert.deepEqual(getWorkspaceAgentPrefs(db, '/tmp/work-a'), {
+    workspaceRoot: '/tmp/work-a',
+    model: 'gpt-5-codex',
+    reasoningEffort: 'xhigh',
+  });
+
+  texts.length = 0;
+  await router.handleUserMessage(key, '/effort clear', sink as any);
+  assert.ok(String(texts.at(-1)).includes('cleared workspace reasoning effort'));
+  assert.deepEqual(getWorkspaceAgentPrefs(db, '/tmp/work-a'), {
+    workspaceRoot: '/tmp/work-a',
+    model: 'gpt-5-codex',
+    reasoningEffort: null,
+  });
 
   router.close();
 });

@@ -56,6 +56,8 @@ export async function startTelegram(
     { command: 'ui', description: 'Set UI mode (verbose/summary)' },
     { command: 'cli', description: 'Show/switch ACP CLI preset' },
     { command: 'workspace', description: 'Show/set workspace' },
+    { command: 'model', description: 'Show/list/set workspace model' },
+    { command: 'effort', description: 'Show/list/set workspace effort' },
     { command: 'cron', description: 'Manage scheduler jobs' },
     { command: 'new', description: 'Reset conversation session' },
     { command: 'last', description: 'Show last run output' },

@@ -72,6 +72,26 @@ export function buildDiscordSlashCommands(): RESTPostAPIChatInputApplicationComm
       ),
 
     new SlashCommandBuilder()
+      .setName('model')
+      .setDescription('Show, list, clear, or set workspace model')
+      .addStringOption((opt) =>
+        opt
+          .setName('value')
+          .setDescription('show, list, clear, or a model id')
+          .setRequired(false),
+      ),
+
+    new SlashCommandBuilder()
+      .setName('effort')
+      .setDescription('Show, list, clear, or set workspace reasoning effort')
+      .addStringOption((opt) =>
+        opt
+          .setName('value')
+          .setDescription('show, list, clear, medium, high, xhigh...')
+          .setRequired(false),
+      ),
+
+    new SlashCommandBuilder()
       .setName('replay')
       .setDescription('Replay stored session/update output for a run')
       .addStringOption((opt) =>
@@ -227,6 +247,16 @@ export function mapDiscordSlashToRouterCommand(
       const raw = interaction.options.getString('path');
       const pathArg = raw?.trim();
       return pathArg ? `/workspace ${pathArg}` : '/workspace show';
+    }
+    case 'model': {
+      const value = interaction.options.getString('value');
+      const arg = value?.trim();
+      return arg ? `/model ${arg}` : '/model show';
+    }
+    case 'effort': {
+      const value = interaction.options.getString('value');
+      const arg = value?.trim();
+      return arg ? `/effort ${arg}` : '/effort show';
     }
     case 'replay': {
       const runId = interaction.options.getString('run_id');

@@ -34,7 +34,7 @@ This document lists current gaps (vs a "production gateway") and the planned dir
 - Context replay (DB-backed) for fresh ACP sessions.
 - Delivery checkpoints table + `/replay` command (best-effort).
 - Interactive permission buttons on Discord/Telegram (Allow/Deny).
-- Discord built-in slash command registration + handling (`/help`, `/ui`, `/cli`, `/workspace`, `/new`, `/last`, `/replay`, `/allow`, `/deny`, `/cron`).
+- Discord built-in slash command registration + handling (`/help`, `/ui`, `/cli`, `/workspace`, `/model`, `/effort`, `/new`, `/last`, `/replay`, `/allow`, `/deny`, `/cron`).
 - Process guard script for auto-restart on abnormal exit (`scripts/run-guard.sh`).
 - Process guard supports daemon lifecycle commands (`start/stop/restart/status/logs`) with `nohup` background mode and auto `npm i && npm run build` on `start/restart`.
 - Process guard now pre-cleans `gateway.lock` (kill lock PID if alive, remove stale lock) before each launch attempt.
@@ -44,6 +44,7 @@ This document lists current gaps (vs a "production gateway") and the planned dir
 - Default UI mode switched to `summary` (conversation-level `/ui` override still supported).
 - Tool-call UI now tracks lifecycle (`start`/`update`/`complete`) keyed by tool-call id to reduce duplicate tool messages.
 - Conversation preferences can now be changed before first prompt (`/ui`, `/workspace`, `/cli`) and survive `/new` session reset.
+- Workspace-scoped Codex model / reasoning preferences can now be saved via `/model` and `/effort`, and are re-applied when switching back to that workspace on a fresh ACP session.
 - ACP transport now fails fast on child exit/bootstrap timeout, returning explicit errors instead of leaving runs hanging.
 - Discord permission approvals now support emoji reactions (`✅`/`👍` allow, `❌`/`👎` deny) in addition to buttons.
 - Gateway now synthesizes interactive permission prompts when an agent calls tools directly without `session/request_permission`, preserving deny-by-default UX.

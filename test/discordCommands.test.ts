@@ -32,8 +32,10 @@ test('buildDiscordSlashCommands includes base command names', () => {
     'cli',
     'cron',
     'deny',
+    'effort',
     'help',
     'last',
+    'model',
     'new',
     'replay',
     'ui',
@@ -110,6 +112,26 @@ test('mapDiscordSlashToRouterCommand maps optional args', () => {
       }),
     ),
     '/cli show',
+  );
+
+  assert.equal(
+    mapDiscordSlashToRouterCommand(
+      makeInteraction({
+        commandName: 'model',
+        strings: { value: 'gpt-5' },
+      }),
+    ),
+    '/model gpt-5',
+  );
+
+  assert.equal(
+    mapDiscordSlashToRouterCommand(
+      makeInteraction({
+        commandName: 'effort',
+        strings: { value: 'xhigh' },
+      }),
+    ),
+    '/effort xhigh',
   );
 
   assert.equal(

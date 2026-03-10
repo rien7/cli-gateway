@@ -15,6 +15,10 @@ import {
   upsertDeliveryCheckpoint,
 } from '../src/db/deliveryCheckpointStore.js';
 import {
+  getWorkspaceAgentPrefs,
+  updateWorkspaceAgentPrefs,
+} from '../src/db/workspaceAgentPrefStore.js';
+import {
   bindingKeyFromConversationKey,
   createRun,
   createSession,
@@ -134,4 +138,35 @@ test('deliveryCheckpointStore upsert/get', () => {
     }),
     'discord:c:-:__chat_scope__',
   );
+});
+
+test('workspaceAgentPrefStore upserts and clears workspace prefs', () => {
+  const db = createDb();
+  const workspaceRoot = '/tmp/work-a';
+
+  assert.equal(getWorkspaceAgentPrefs(db, workspaceRoot), null);
+
+  updateWorkspaceAgentPrefs(db, workspaceRoot, { model: 'gpt-5' });
+  assert.deepEqual(getWorkspaceAgentPrefs(db, workspaceRoot), {
+    workspaceRoot,
+    model: 'gpt-5',
+    reasoningEffort: null,
+  });
+
+  updateWorkspaceAgentPrefs(db, workspaceRoot, { reasoningEffort: 'high' });
+  assert.deepEqual(getWorkspaceAgentPrefs(db, workspaceRoot), {
+    workspaceRoot,
+    model: 'gpt-5',
+    reasoningEffort: 'high',
+  });
+
+  updateWorkspaceAgentPrefs(db, workspaceRoot, { model: null });
+  assert.deepEqual(getWorkspaceAgentPrefs(db, workspaceRoot), {
+    workspaceRoot,
+    model: null,
+    reasoningEffort: 'high',
+  });
+
+  updateWorkspaceAgentPrefs(db, workspaceRoot, { reasoningEffort: null });
+  assert.equal(getWorkspaceAgentPrefs(db, workspaceRoot), null);
 });

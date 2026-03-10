@@ -1,9 +1,16 @@
 import { log } from '../logging.js';
 import type { Db } from '../db/db.js';
+import { getWorkspaceAgentPrefs } from '../db/workspaceAgentPrefStore.js';
 import type { AppConfig } from '../config.js';
 import type { OutboundSink, ToolUiStage, UiMode } from './types.js';
 import { AcpClient, type PermissionRequest } from '../acp/client.js';
-import type { ContentBlock, InitializeResult } from '../acp/types.js';
+import type {
+  ContentBlock,
+  InitializeResult,
+  SessionConfigOption,
+  SessionConfigSelectGroup,
+  SessionConfigSelectOption,
+} from '../acp/types.js';
 import {
   SHARED_CHAT_SCOPE_USER_ID,
   updateAcpSessionId,
@@ -22,6 +29,7 @@ export class BindingRuntime {
   private init: InitializeResult | null = null;
 
   private acpSessionId: string | null = null;
+  private sessionConfigOptions: SessionConfigOption[] | null = null;
 
   private queue: Promise<unknown> = Promise.resolve();
   private activeSink: OutboundSink | null = null;
@@ -327,8 +335,32 @@ export class BindingRuntime {
     });
 
     this.acpSessionId = newSession.sessionId;
+    this.sessionConfigOptions = cloneConfigOptions(newSession.configOptions);
     updateAcpSessionId(this.db, this.sessionKey, this.acpSessionId);
+    await this.applyStoredWorkspacePrefs(this.acpSessionId);
     return this.acpSessionId;
+  }
+
+  async getSessionConfigOption(optionId: string): Promise<SessionConfigOption | null> {
+    return this.enqueue(async () => {
+      await this.ensureSessionId();
+      return findConfigOption(this.sessionConfigOptions, optionId);
+    });
+  }
+
+  async setSessionConfigOption(
+    optionId: string,
+    value: string,
+  ): Promise<SessionConfigOption | null> {
+    return this.enqueue(async () => {
+      const sessionId = await this.ensureSessionId();
+      const configOptions = await this.setSessionConfigOptionDirect(
+        sessionId,
+        optionId,
+        value,
+      );
+      return findConfigOption(configOptions, optionId);
+    });
   }
 
   getLoadSupported(): boolean {
@@ -468,7 +500,7 @@ export class BindingRuntime {
     contextText?: string;
     actorUserId?: string;
   }): Promise<{ stopReason: string; lastSeq: number }> {
-    const next = this.queue.then(async () => {
+    return this.enqueue(async () => {
       const isFreshSession = !this.acpSessionId;
       const sessionId = await this.ensureSessionId();
 
@@ -528,14 +560,62 @@ export class BindingRuntime {
         this.toolCallTextBreaks = new Set<string>();
       }
     });
+  }
 
-    // Keep the queue alive even if this prompt fails.
+  private enqueue<T>(action: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(action);
     this.queue = next.then(
       () => undefined,
       () => undefined,
     );
-
     return next;
+  }
+
+  private async applyStoredWorkspacePrefs(sessionId: string): Promise<void> {
+    const prefs = getWorkspaceAgentPrefs(this.db, this.workspaceRoot);
+    if (!prefs) return;
+
+    try {
+      if (prefs.model) {
+        await this.setSessionConfigOptionDirect(sessionId, 'model', prefs.model);
+      }
+
+      if (prefs.reasoningEffort) {
+        const effortOption = findConfigOption(
+          this.sessionConfigOptions,
+          'reasoning_effort',
+        );
+        if (effortOption?.type === 'select') {
+          const supported = new Set(listConfigOptionValues(effortOption));
+          if (supported.has(prefs.reasoningEffort)) {
+            await this.setSessionConfigOptionDirect(
+              sessionId,
+              'reasoning_effort',
+              prefs.reasoningEffort,
+            );
+          }
+        }
+      }
+    } catch (error) {
+      log.warn('failed to apply workspace agent prefs', {
+        workspaceRoot: this.workspaceRoot,
+        error,
+      });
+    }
+  }
+
+  private async setSessionConfigOptionDirect(
+    sessionId: string,
+    optionId: string,
+    value: string,
+  ): Promise<SessionConfigOption[]> {
+    const result = await this.client.setSessionConfigOption({
+      sessionId,
+      configId: optionId,
+      value,
+    });
+    this.sessionConfigOptions = cloneConfigOptions(result.configOptions);
+    return cloneConfigOptions(result.configOptions);
   }
 
   private isPermissionActorAuthorized(actorUserId?: string): boolean {
@@ -613,6 +693,44 @@ export class BindingRuntime {
 
     return kind === 'tool_call';
   }
+}
+
+function findConfigOption(
+  options: SessionConfigOption[] | null,
+  optionId: string,
+): SessionConfigOption | null {
+  if (!options) return null;
+  return cloneConfigOption(options.find((option) => option.id === optionId) ?? null);
+}
+
+function listConfigOptionValues(option: SessionConfigOption): string[] {
+  if (option.type !== 'select') return [];
+  const groups = option.options;
+  if (!Array.isArray(groups)) return [];
+  if (groups.length === 0) return [];
+
+  const first = groups[0] as SessionConfigSelectOption | SessionConfigSelectGroup;
+  if ('options' in first) {
+    return (groups as SessionConfigSelectGroup[]).flatMap((group) =>
+      group.options.map((item) => item.value),
+    );
+  }
+
+  return (groups as SessionConfigSelectOption[]).map((item) => item.value);
+}
+
+function cloneConfigOptions(
+  options: SessionConfigOption[] | null | undefined,
+): SessionConfigOption[] {
+  if (!options?.length) return [];
+  return options.map((option) => cloneConfigOption(option)).filter(Boolean) as SessionConfigOption[];
+}
+
+function cloneConfigOption(
+  option: SessionConfigOption | null,
+): SessionConfigOption | null {
+  if (!option) return null;
+  return JSON.parse(JSON.stringify(option)) as SessionConfigOption;
 }
 
 function toToolKind(kind: unknown): ToolKind | null {

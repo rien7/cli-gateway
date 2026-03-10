@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 5;
+const LATEST_VERSION = 6;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -160,6 +160,22 @@ export function migrate(db: Db): void {
       ON tool_allow_prefixes(binding_key, tool_kind);
 
       UPDATE schema_version SET version = 5;
+      `,
+    );
+  }
+
+  if (current < 6) {
+    db.exec(
+      `
+      CREATE TABLE IF NOT EXISTS workspace_agent_prefs (
+        workspace_root TEXT NOT NULL PRIMARY KEY,
+        model TEXT,
+        reasoning_effort TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      UPDATE schema_version SET version = 6;
       `,
     );
   }

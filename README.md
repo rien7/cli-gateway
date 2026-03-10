@@ -158,16 +158,19 @@ Feishu currently runs in webhook event-subscription mode:
 - `/replay [runId]` replay stored `session/update` output for a run (best-effort)
 - `/ui verbose|summary` set UI verbosity for this conversation
 - `/cli show|codex|claude` show/switch ACP CLI preset for this conversation
+- `/model show|list|clear|<model-id>` show/list/set workspace-scoped model preference
+- `/effort show|list|clear|<level>` show/list/set workspace-scoped reasoning-effort preference
 - Claude preset uses `@zed-industries/claude-code-acp`; make sure Claude auth is available (for example `ANTHROPIC_API_KEY` or Claude `/login`).
 - ACP startup failures now fail fast (exit/timeout) and return an explicit error instead of hanging the conversation.
 - `/workspace show|~|~/...|/abs/path` show/set per-conversation workspace root (alias: `/ws`)
+- `/workspace` switches to that workspace's saved `model` / `reasoning_effort` on the next fresh ACP session (currently useful with agents that expose ACP `configOptions`, such as `codex-acp`)
 - `/help` also includes ACP `available_commands_update` entries as `cli-inline` commands (best-effort)
 
 Telegram note:
 - Chat-scoped command menu is synced best-effort from `cli-inline` commands. Commands with `-` are mapped to `_` in Telegram UI.
 
 Discord note:
-- Built-in commands are available as slash commands (`/help`, `/ui`, `/cli`, `/workspace`, `/new`, `/last`, `/replay`, `/allow`, `/deny`, `/whitelist`, `/cron`).
+- Built-in commands are available as slash commands (`/help`, `/ui`, `/cli`, `/workspace`, `/model`, `/effort`, `/new`, `/last`, `/replay`, `/allow`, `/deny`, `/whitelist`, `/cron`).
 - Slash commands are synced at startup (global + per-guild best-effort). Global command propagation may take time on Discord side.
 - ACP `cli-inline` dynamic commands are not yet exposed as Discord slash commands.
 - Inbound message processing uses reaction acks (`🤔` while running, then `🕊` on success or `😢` on error), aligned with Telegram behavior.
@@ -202,6 +205,7 @@ After `session/prompt` returns, the gateway keeps the run open through a short `
   - Private chat: isolated per user
   - Group/supergroup/topic: isolated per chat (and topic thread when present)
 - Workspace root (`/workspace`) and run history follow the same binding scope.
+- Model / reasoning-effort prefs are keyed by `workspace_root`, so switching back to a workspace restores its saved agent settings on the next fresh ACP session.
 - `/new` starts a fresh ACP session but keeps conversation-scoped preferences (UI mode, workspace root, CLI preset, permission policies).
 
 ## Memory (context replay)
