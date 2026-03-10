@@ -29,6 +29,8 @@ import type {
   PromptResult,
   RequestPermissionParams,
   RequestPermissionResult,
+  SetSessionConfigOptionParams,
+  SetSessionConfigOptionResult,
   TerminalCreateParams,
   TerminalCreateResult,
   TerminalKillParams,
@@ -84,8 +86,11 @@ type PendingRequest = {
 };
 
 const ACP_BOOTSTRAP_TIMEOUT_MS = 30_000;
-const ACP_PROMPT_UPDATE_IDLE_MS = 150;
-const ACP_PROMPT_UPDATE_MAX_WAIT_MS = 1_500;
+// Some ACP agents emit trailing session/update notifications shortly after
+// session/prompt resolves. Keep the run open long enough to capture these
+// tail chunks instead of dropping the end of the assistant message.
+const ACP_PROMPT_UPDATE_IDLE_MS = 500;
+const ACP_PROMPT_UPDATE_MAX_WAIT_MS = 5_000;
 
 type PromptDrainState = {
   runId: string;
@@ -211,6 +216,15 @@ export class AcpClient {
       'session/new',
       params,
       ACP_BOOTSTRAP_TIMEOUT_MS,
+    );
+  }
+
+  async setSessionConfigOption(
+    params: SetSessionConfigOptionParams,
+  ): Promise<SetSessionConfigOptionResult> {
+    return this.request<SetSessionConfigOptionParams, SetSessionConfigOptionResult>(
+      'session/set_config_option',
+      params,
     );
   }
 

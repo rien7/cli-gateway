@@ -27,10 +27,65 @@ export type NewSessionParams = {
   mcpServers: unknown[];
 };
 
+export type ModelInfo = {
+  modelId: string;
+  name: string;
+  description?: string;
+};
+
+export type SessionModelState = {
+  currentModelId: string;
+  availableModels: ModelInfo[];
+};
+
+export type SessionConfigSelectOption = {
+  value: string;
+  name: string;
+  description?: string;
+};
+
+export type SessionConfigSelectGroup = {
+  group: string;
+  name: string;
+  options: SessionConfigSelectOption[];
+};
+
+export type SessionConfigSelectOptions =
+  | SessionConfigSelectOption[]
+  | SessionConfigSelectGroup[];
+
+export type SessionConfigOption =
+  | {
+      id: string;
+      name: string;
+      description?: string;
+      category?: string;
+      type: 'select';
+      currentValue: string;
+      options: SessionConfigSelectOptions;
+    }
+  | {
+      id: string;
+      name: string;
+      description?: string;
+      category?: string;
+      type: 'boolean';
+      currentValue: boolean;
+    }
+  | {
+      id: string;
+      name: string;
+      description?: string;
+      category?: string;
+      type: string;
+      [key: string]: unknown;
+    };
+
 export type NewSessionResult = {
   sessionId: string;
   availableModes?: Array<{ id: string; name: string; description?: string }>;
-  configOptions?: unknown[];
+  models?: SessionModelState;
+  configOptions?: SessionConfigOption[];
 };
 
 export type ContentBlock =
@@ -69,6 +124,21 @@ export type RequestPermissionOutcome =
 
 export type RequestPermissionResult = {
   outcome: RequestPermissionOutcome;
+};
+
+export type SetSessionConfigOptionParams = {
+  sessionId: string;
+  configId: string;
+  value:
+    | string
+    | {
+        type: 'boolean';
+        value: boolean;
+      };
+};
+
+export type SetSessionConfigOptionResult = {
+  configOptions: SessionConfigOption[];
 };
 
 export type FsReadTextFileParams = {
